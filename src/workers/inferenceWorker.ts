@@ -38,10 +38,10 @@ function resolveModelUrl(fileName: string): string {
 }
 
 const MODEL_URLS: Record<ModelKey, string> = {
-  cw_detect: resolveModelUrl("detect_cw/88C0EAD8-52C6-460C-9B9F-EE6CB56221F3"),
-  en: resolveModelUrl("en/39578E22-27CE-4AFB-989F-450345767A53"),
-  en_narrow: resolveModelUrl("en_narrow/4C1FFB1B-6F80-4B73-A5D2-6089EAF8E102"),
-  ja: resolveModelUrl("ja/A960AA1B-FFD3-4795-A881-484F4EEB0455"),
+  cw_detect: resolveModelUrl("detect_cw_model.onnx"),
+  en: resolveModelUrl("model_en.onnx"),
+  en_narrow: resolveModelUrl("model_en_narrow.onnx"),
+  ja: resolveModelUrl("model_ja.onnx"),
 };
 
 const ORT_RUNTIME_ASSETS: Record<
@@ -203,6 +203,12 @@ async function getModelData(
   modelKey: ModelKey,
   onProgress?: (progress: number) => void,
 ): Promise<Uint8Array> {
+  if (modelKey !== "en") {
+    throw new Error(
+      `${modelKey} model is not included in the public DeepCW engine distribution.`,
+    );
+  }
+
   const cachedModel = modelDataCache[modelKey];
   if (cachedModel) {
     onProgress?.(1);

@@ -163,12 +163,12 @@ function getPopupPosition(
 }
 
 function getFrameEndSample(frame: number): number {
-  return frame * HOP_LENGTH + FFT_LENGTH;
+  return Math.round(frame * HOP_LENGTH + FFT_LENGTH / 2);
 }
 
 function getSpanMidpointSample(startFrame: number, endFrame: number): number {
   const midFrame = (startFrame + endFrame) / 2;
-  return Math.round(midFrame * HOP_LENGTH + FFT_LENGTH / 2);
+  return Math.round(midFrame * HOP_LENGTH);
 }
 
 function getRedecodeAudioSlice(token: RedecodeToken): Float32Array {

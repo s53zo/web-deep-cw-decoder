@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import { AUDIO_CHUNK_SAMPLES, SAMPLE_RATE, getBufferSamples } from "../const";
+import {
+  getIsolatedAudioChannel,
+  getProcessorInputChannelCount,
+} from "../utils/audioChannels";
 
 export type AudioBufferState = {
   samples: Float32Array;
@@ -8,9 +12,10 @@ export type AudioBufferState = {
 
 function audioCallback(
   event: AudioProcessingEvent,
-  audioBufferState: AudioBufferState
+  audioBufferState: AudioBufferState,
+  channelIndex: number,
 ) {
-  const chunk = event.inputBuffer.getChannelData(0);
+  const chunk = getIsolatedAudioChannel(event.inputBuffer, channelIndex);
   const chunkLen = chunk.length;
   const { samples } = audioBufferState;
   const offset = Math.max(0, samples.length - chunkLen);
@@ -24,7 +29,9 @@ function audioCallback(
 
 export function useAudioProcessing(
   stream: MediaStream | null,
-  bufferDurationSeconds: number
+  bufferDurationSeconds: number,
+  channelIndex = 0,
+  inputChannelCount = 1,
 ): React.MutableRefObject<AudioBufferState> {
   const audioBufferRef = useRef<AudioBufferState>({
     samples: new Float32Array(getBufferSamples(bufferDurationSeconds)),
@@ -48,11 +55,12 @@ export function useAudioProcessing(
 
     const scriptProcessor = audioContext.createScriptProcessor(
       AUDIO_CHUNK_SAMPLES,
-      1,
+      getProcessorInputChannelCount(channelIndex, inputChannelCount),
       1,
     );
+    scriptProcessor.channelInterpretation = "discrete";
     scriptProcessor.onaudioprocess = (event) =>
-      audioCallback(event, audioBufferRef.current);
+      audioCallback(event, audioBufferRef.current, channelIndex);
 
     source.connect(scriptProcessor);
     scriptProcessor.connect(audioContext.destination);
@@ -70,7 +78,7 @@ export function useAudioProcessing(
         audioContextRef.current = null;
       }
     };
-  }, [stream]);
+  }, [channelIndex, inputChannelCount, stream]);
 
   return audioBufferRef;
 }

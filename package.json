@@ -4,9 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "models:download": "node scripts/download-models.mjs",
+    "models:verify": "npm run models:download && node scripts/verify-model.mjs",
+    "predev": "npm run models:download",
     "dev": "vite",
+    "prebuild": "npm run models:download",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
     "preview": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy"
   },

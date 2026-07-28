@@ -22,6 +22,8 @@ node_modules
 *.sw?
 
 /dist
+/public/models/*.onnx
+/public/models/*.onnx.json
 
 # wrangler files
 .wrangler

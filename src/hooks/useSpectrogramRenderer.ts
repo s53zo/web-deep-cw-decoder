@@ -8,6 +8,8 @@ type UseSpectrogramRendererParams = {
   stream: MediaStream;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   decodeWindowSeconds: number;
+  channelIndex?: number;
+  inputChannelCount?: number;
   minFreqHz?: number;
   maxFreqHz?: number;
   brightness?: number;
@@ -18,6 +20,8 @@ export const useSpectrogramRenderer = ({
   stream,
   canvasRef,
   decodeWindowSeconds,
+  channelIndex = 0,
+  inputChannelCount = 1,
   minFreqHz = MIN_FREQ_HZ,
   maxFreqHz = MAX_FREQ_HZ,
   brightness = 1,
@@ -28,6 +32,7 @@ export const useSpectrogramRenderer = ({
   const nodesRef = useRef<{
     audioCtx: AudioContext;
     source: MediaStreamAudioSourceNode;
+    splitter: ChannelSplitterNode;
     analyser: AnalyserNode;
   } | null>(null);
 
@@ -94,15 +99,21 @@ export const useSpectrogramRenderer = ({
 
     const audioCtx: AudioContext = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);
+    source.channelInterpretation = "discrete";
+    const splitter = audioCtx.createChannelSplitter(
+      Math.max(inputChannelCount, channelIndex + 1),
+    );
 
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2 ** 12;
     analyser.smoothingTimeConstant = 0;
     analyser.minDecibels = -70;
     analyser.maxDecibels = -30;
-    source.connect(analyser);
+    // Route exactly one physical input channel into this radio's analyser.
+    source.connect(splitter);
+    splitter.connect(analyser, channelIndex, 0);
 
-    nodesRef.current = { audioCtx, source, analyser };
+    nodesRef.current = { audioCtx, source, splitter, analyser };
 
     const freqBins = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(freqBins);
@@ -322,10 +333,11 @@ export const useSpectrogramRenderer = ({
       invalidateRenderResources();
       if (nodesRef.current) {
         nodesRef.current.source.disconnect();
+        nodesRef.current.splitter.disconnect();
         nodesRef.current.analyser.disconnect();
-        nodesRef.current.audioCtx.close();
+        void nodesRef.current.audioCtx.close();
         nodesRef.current = null;
       }
     };
-  }, [stream, canvasRef]);
+  }, [canvasRef, channelIndex, inputChannelCount, stream]);
 };

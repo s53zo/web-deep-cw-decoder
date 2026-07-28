@@ -11,6 +11,8 @@ type ScopeProps = {
   filterFreq: number | null;
   filterWidth: number;
   decodeWindowSeconds: number;
+  channelIndex?: number;
+  inputChannelCount?: number;
   disableInteraction?: boolean;
   height?: number;
   minFreqHz?: number;
@@ -25,6 +27,8 @@ export const Scope = memo(function Scope({
   filterFreq,
   filterWidth,
   decodeWindowSeconds,
+  channelIndex = 0,
+  inputChannelCount = 1,
   disableInteraction,
   height = 256,
   minFreqHz = MIN_FREQ_HZ,
@@ -38,6 +42,8 @@ export const Scope = memo(function Scope({
     stream,
     canvasRef,
     decodeWindowSeconds,
+    channelIndex,
+    inputChannelCount,
     minFreqHz,
     maxFreqHz,
     brightness,

@@ -11,8 +11,63 @@ Launch DeepCW: https://cw.e04.workers.dev/
 - **Real-time Morse code decoding** using deep learning
 - **Robust decoding** for weak signals, QSB, and noisy conditions
 - **Multi-channel decoding** for handling multiple CW signals
+- **SO2R stereo decoding** with the left radio on channel 0 and right radio on channel 1
 - **Audio pass-through** with deep-learning-based noise reduction
 - **Cross-platform support** for Windows, macOS, Android, and iOS
+
+## Run locally
+
+Install the JavaScript dependencies and start the development server:
+
+```bash
+npm install
+npm run dev
+```
+
+Then open the local URL printed by Vite, normally
+<http://localhost:5173/>. The development and production build commands
+automatically download the pinned public English model from
+[deepcw-engine](https://github.com/e04/deepcw-engine) and verify its SHA-256
+checksum before starting.
+
+To check the model independently:
+
+```bash
+npm run models:verify
+```
+
+This verifies the published metadata, parses the ONNX protobuf, and runs a real
+inference. It is also a useful diagnostic if the page reports a model-loading
+error.
+
+The browser keeps the existing 9.6 kHz capture path. Immediately before
+inference, each isolated channel is converted with the model's published
+settings: 3.2 kHz linear resampling, centered 256-sample Hann frames, 48-sample
+hop, 400–1200 Hz / 65 bins, and `log1p` magnitude normalization.
+
+The public engine distribution currently includes the standard English model.
+Pileup mode and Japanese decoding remain visible but disabled because their
+separate models are not publicly distributed with the engine. Normal,
+Benchmark, and SO2R modes use the verified English model.
+
+## SO2R stereo input
+
+Select **SO2R** mode to decode two radios from one stereo capture device. DeepCW
+requests and verifies a two-channel input, then keeps the channels isolated:
+
+- channel 0 / left: **LEFT RADIO**
+- channel 1 / right: **RIGHT RADIO**
+
+Each radio has its own scope, decode band, bandwidth, window, live decode, and
+streaming transcript. The inference engine is shared. Audio THRU is disabled in
+SO2R mode so monitoring cannot accidentally combine the channels.
+
+On macOS, configure the radio or audio interface as a two-channel input in
+**Audio MIDI Setup**, route the left radio to input 1 and the right radio to
+input 2. If the input list is initially empty, click **START** once and grant
+microphone access. Select the interface under **STEREO INPUT**, then click
+**START** again to begin decoding. Confirm that DeepCW reports two captured
+channels and the expected sample rate.
 
 <img width="800" src="https://github.com/user-attachments/assets/3207c5c0-7613-4448-a42b-aac08b8fd030" />
 
@@ -135,7 +190,4 @@ DeepCW includes a real-time, deep-learning-based noise reduction feature designe
 In addition to decoding Morse code, DeepCW can pass the audio through a neural noise reduction model, making noisy CW signals easier to monitor by ear.
 
 Also see: https://github.com/e04/HamNoise
-
-
-
 

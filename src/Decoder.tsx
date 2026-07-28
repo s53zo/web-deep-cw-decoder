@@ -5,6 +5,9 @@ import {
   DEFAULT_DECODE_BANDWIDTH_HZ,
   DEFAULT_DECODE_WINDOW_S,
   DECODE_WINDOW_OPTIONS,
+  FILTER_WIDTH_OPTIONS,
+  MAX_FREQ_HZ,
+  MIN_FREQ_HZ,
   SAMPLE_RATE,
   PILEUP_WINDOW_S,
   PILEUP_MIN_FREQ_HZ,
@@ -22,13 +25,23 @@ import { usePileupDecode } from "./hooks/usePileupDecode";
 import { usePileupDetection } from "./hooks/usePileupDetection";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { useStreamingDecode } from "./hooks/useStreamingDecode";
+import { useSo2rChannel } from "./hooks/useSo2rChannel";
 import { DecodeDisplay } from "./DecodeDisplay";
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { LoadProgressBars } from "./LoadProgressBars";
 import { PileupOverlay } from "./PileupOverlay";
 import { StreamingTranscriptDisplay } from "./StreamingTranscriptDisplay";
+import { So2rRadioPanel } from "./So2rRadioPanel";
 import type { PileupTrack } from "./utils/pileupCandidates";
-import { Box, Button, Flex, NativeSelect, Stack, Tooltip } from "@mantine/core";
+import {
+  Box,
+  Button,
+  Flex,
+  NativeSelect,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import {
   INFERENCE_BACKEND_OPTIONS,
   type InferenceBackend,
@@ -39,28 +52,39 @@ import {
   parseStringOption,
 } from "./utils/optionUtils";
 
-type DecoderMode = "normal" | "pileup" | "benchmark";
+type DecoderMode = "normal" | "so2r" | "pileup" | "benchmark";
 type DecoderLanguage = "EN" | "EN/JA";
 
-const FILTER_WIDTH_OPTIONS = [
-  100,
-  150,
-  250,
-  500,
-  DEFAULT_DECODE_BANDWIDTH_HZ,
-] as const;
-const MODE_OPTIONS = ["normal", "pileup", "benchmark"] as const;
+const MODE_OPTIONS = ["normal", "so2r", "pileup", "benchmark"] as const;
+const AVAILABLE_MODE_OPTIONS = ["normal", "so2r", "benchmark"] as const;
 const LANGUAGE_OPTIONS: readonly DecoderLanguage[] = ["EN", "EN/JA"];
 const BACKEND_OPTIONS: readonly InferenceBackend[] =
   INFERENCE_BACKEND_OPTIONS.map((option) => option.value);
+
+type CaptureInfo = {
+  requestedChannelCount: 1 | 2;
+  channelCount: number;
+  sampleRate: number | null;
+};
+
+const isValidDecodeFrequency = (value: unknown): value is number =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  value >= MIN_FREQ_HZ &&
+  value <= MAX_FREQ_HZ;
 
 export const Decoder = () => {
   const [mode, setMode] = usePersistedState<DecoderMode>(
     "decoder.mode",
     "normal",
-    (value): value is DecoderMode => hasMatchingOption(value, MODE_OPTIONS),
+    (value): value is DecoderMode =>
+      hasMatchingOption(value, AVAILABLE_MODE_OPTIONS),
   );
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [captureInfo, setCaptureInfo] = useState<CaptureInfo | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
   const [filterFreq, setFilterFreq] = useState(DEFAULT_DECODE_CENTER_FREQ_HZ);
   const [filterWidth, setFilterWidth] = usePersistedState<number>(
     "decoder.filterWidth",
@@ -70,8 +94,7 @@ export const Decoder = () => {
   const [language, setLanguage] = usePersistedState<DecoderLanguage>(
     "decoder.language",
     "EN",
-    (value): value is DecoderLanguage =>
-      hasMatchingOption(value, LANGUAGE_OPTIONS),
+    (value): value is DecoderLanguage => value === "EN",
   );
   const [backend, setBackend] = usePersistedState<InferenceBackend>(
     "decoder.backend",
@@ -82,6 +105,46 @@ export const Decoder = () => {
   const [decodeWindowSeconds, setDecodeWindowSeconds] =
     usePersistedState<DecodeWindowSeconds>(
       "decoder.decodeWindowSeconds",
+      DEFAULT_DECODE_WINDOW_S,
+      (value): value is DecodeWindowSeconds =>
+        hasMatchingOption(value, DECODE_WINDOW_OPTIONS),
+    );
+  const [so2rLeftFilterFreq, setSo2rLeftFilterFreq] =
+    usePersistedState<number>(
+      "decoder.so2r.left.filterFreq",
+      DEFAULT_DECODE_CENTER_FREQ_HZ,
+      isValidDecodeFrequency,
+    );
+  const [so2rLeftFilterWidth, setSo2rLeftFilterWidth] =
+    usePersistedState<number>(
+      "decoder.so2r.left.filterWidth",
+      DEFAULT_DECODE_BANDWIDTH_HZ,
+      (value): value is number =>
+        hasMatchingOption(value, FILTER_WIDTH_OPTIONS),
+    );
+  const [so2rLeftWindowSeconds, setSo2rLeftWindowSeconds] =
+    usePersistedState<DecodeWindowSeconds>(
+      "decoder.so2r.left.decodeWindowSeconds",
+      DEFAULT_DECODE_WINDOW_S,
+      (value): value is DecodeWindowSeconds =>
+        hasMatchingOption(value, DECODE_WINDOW_OPTIONS),
+    );
+  const [so2rRightFilterFreq, setSo2rRightFilterFreq] =
+    usePersistedState<number>(
+      "decoder.so2r.right.filterFreq",
+      DEFAULT_DECODE_CENTER_FREQ_HZ,
+      isValidDecodeFrequency,
+    );
+  const [so2rRightFilterWidth, setSo2rRightFilterWidth] =
+    usePersistedState<number>(
+      "decoder.so2r.right.filterWidth",
+      DEFAULT_DECODE_BANDWIDTH_HZ,
+      (value): value is number =>
+        hasMatchingOption(value, FILTER_WIDTH_OPTIONS),
+    );
+  const [so2rRightWindowSeconds, setSo2rRightWindowSeconds] =
+    usePersistedState<DecodeWindowSeconds>(
+      "decoder.so2r.right.decodeWindowSeconds",
       DEFAULT_DECODE_WINDOW_S,
       (value): value is DecodeWindowSeconds =>
         hasMatchingOption(value, DECODE_WINDOW_OPTIONS),
@@ -104,16 +167,29 @@ export const Decoder = () => {
     );
 
   const pileupTracksRef = useRef<PileupTrack[]>([]);
+  const previousModeRef = useRef<DecoderMode>(mode);
+  const captureRequestIdRef = useRef(0);
+  const streamRef = useRef<MediaStream | null>(stream);
+  streamRef.current = stream;
 
+  const isSo2r = mode === "so2r";
   const isPileup = mode === "pileup";
   const isBenchmark = mode === "benchmark";
+  const decoderStream =
+    stream &&
+    captureInfo &&
+    (isSo2r
+      ? captureInfo.requestedChannelCount === 2
+      : captureInfo.requestedChannelCount === 1)
+      ? stream
+      : null;
   const {
     isSupported: isPassthroughSupported,
     audioOutputDevices,
     syncAudioOutputDevices,
   } = useAudioPassthrough(selectedAudioOutput, () => setSelectedAudioOutput(""));
   useFilteredPassthroughStream({
-    stream,
+    stream: isSo2r ? null : decoderStream,
     enabled: mode === "normal",
     selectedAudioOutput,
     filterFreq: isPileup ? null : filterFreq,
@@ -133,20 +209,70 @@ export const Decoder = () => {
   }, [audioInputDevices, selectedAudioInput, _setSelectedAudioInput]);
 
   useEffect(() => {
-    if (!isBenchmark || !stream) {
+    let cancelled = false;
+    const refreshInputs = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!cancelled) {
+          setAudioInputDevices(
+            devices.filter((device) => device.kind === "audioinput"),
+          );
+        }
+      } catch (error) {
+        console.error("Failed to list audio input devices.", error);
+      }
+    };
+    const handleDeviceChange = () => {
+      void refreshInputs();
+    };
+
+    void refreshInputs();
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousMode = previousModeRef.current;
+    previousModeRef.current = mode;
+
+    const crossedSo2rBoundary =
+      (previousMode === "so2r") !== (mode === "so2r");
+    if (!isBenchmark && !crossedSo2rBoundary) {
       return;
     }
 
-    stream.getTracks().forEach((track) => track.stop());
+    captureRequestIdRef.current += 1;
+    stream?.getTracks().forEach((track) => track.stop());
     setStream(null);
-  }, [isBenchmark, stream]);
+    setCaptureInfo(null);
+    setCaptureError(null);
+    setCaptureNotice(null);
+    setIsStarting(false);
+  }, [isBenchmark, mode, stream]);
+
+  useEffect(
+    () => () => {
+      captureRequestIdRef.current += 1;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
 
   const effectiveWindowSeconds = isPileup
     ? PILEUP_WINDOW_S
     : decodeWindowSeconds;
-  const progressLanguage = isPileup ? "EN" : language;
+  const progressLanguage = isPileup || isSo2r ? "EN" : language;
 
-  const audioBufferRef = useAudioProcessing(stream, effectiveWindowSeconds);
+  const audioBufferRef = useAudioProcessing(
+    isSo2r ? null : decoderStream,
+    effectiveWindowSeconds,
+  );
   const loadProgress = useLoadProgress(
     backend,
     progressLanguage,
@@ -168,7 +294,7 @@ export const Decoder = () => {
   } = useDecode({
     filterFreq: isPileup ? null : filterFreq,
     filterWidth,
-    stream,
+    stream: decoderStream,
     language: isPileup ? "EN" : language,
     backend,
     decodeWindowSeconds: effectiveWindowSeconds,
@@ -184,7 +310,7 @@ export const Decoder = () => {
   } = useStreamingDecode({
     filterFreq: isPileup ? null : filterFreq,
     filterWidth,
-    stream,
+    stream: decoderStream,
     language: isPileup ? "EN" : language,
     backend,
     enabled: mode === "normal",
@@ -192,11 +318,10 @@ export const Decoder = () => {
 
   const {
     tracks: pileupTracks,
-    isDetecting: isPileupDetecting,
     loaded: pileupDetectionLoaded,
     loadError: pileupDetectionLoadError,
   } = usePileupDetection({
-    stream,
+    stream: decoderStream,
     backend,
     audioBufferRef,
     enabled: isPileup,
@@ -214,7 +339,7 @@ export const Decoder = () => {
     loaded: pileupLoaded,
     loadError: pileupLoadError,
   } = usePileupDecode({
-    stream,
+    stream: decoderStream,
     backend,
     audioBufferRef,
     tracksRef: pileupTracksRef,
@@ -222,9 +347,32 @@ export const Decoder = () => {
     decodeWindowSeconds: effectiveWindowSeconds,
   });
 
+  const so2rLeftDecoder = useSo2rChannel({
+    stream: decoderStream,
+    enabled: isSo2r,
+    channelIndex: 0,
+    filterFreq: so2rLeftFilterFreq,
+    filterWidth: so2rLeftFilterWidth,
+    decodeWindowSeconds: so2rLeftWindowSeconds,
+    backend,
+  });
+  const so2rRightDecoder = useSo2rChannel({
+    stream: decoderStream,
+    enabled: isSo2r,
+    channelIndex: 1,
+    filterFreq: so2rRightFilterFreq,
+    filterWidth: so2rRightFilterWidth,
+    decodeWindowSeconds: so2rRightWindowSeconds,
+    backend,
+  });
+
   const setSelectedAudioInput = (deviceId: string) => {
     _setSelectedAudioInput(deviceId);
-    getStream(deviceId);
+    setCaptureError(null);
+    setCaptureNotice(null);
+    if (stream) {
+      void getStream(deviceId);
+    }
   };
 
   const refreshAudioDevices = async () => {
@@ -236,44 +384,149 @@ export const Decoder = () => {
     syncAudioOutputDevices(devices);
   };
 
+  const prepareAudioInputSelection = async () => {
+    const requestId = captureRequestIdRef.current + 1;
+    captureRequestIdRef.current = requestId;
+    setCaptureError(null);
+    setCaptureNotice(null);
+    setIsStarting(true);
+
+    let permissionStream: MediaStream | null = null;
+    try {
+      permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+      permissionStream = null;
+
+      if (captureRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      await refreshAudioDevices();
+      setCaptureNotice(
+        "Select your two-channel interface under STEREO INPUT, then click START.",
+      );
+    } catch (error) {
+      permissionStream?.getTracks().forEach((track) => track.stop());
+      if (captureRequestIdRef.current !== requestId) {
+        return;
+      }
+      setCaptureError(
+        error instanceof Error
+          ? error.message
+          : "Microphone permission is required to list audio inputs.",
+      );
+    } finally {
+      if (captureRequestIdRef.current === requestId) {
+        setIsStarting(false);
+      }
+    }
+  };
+
   const getStream = async (selectedAudioInput?: string) => {
+    const requestId = captureRequestIdRef.current + 1;
+    captureRequestIdRef.current = requestId;
+    const requestedChannelCount: 1 | 2 = isSo2r ? 2 : 1;
+
     if (stream) {
       stream.getTracks().forEach((track) => track.stop());
     }
 
-    const newStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: selectedAudioInput
-          ? { exact: selectedAudioInput }
-          : undefined,
-        sampleRate: SAMPLE_RATE,
-        channelCount: 1,
-        echoCancellation: false,
-        autoGainControl: false,
-        noiseSuppression: false,
-      },
-    });
+    setStream(null);
+    setCaptureInfo(null);
+    setCaptureError(null);
+    setCaptureNotice(null);
+    setIsStarting(true);
 
-    setStream(newStream);
-    await refreshAudioDevices();
+    let newStream: MediaStream | null = null;
+
+    try {
+      newStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: selectedAudioInput
+            ? { exact: selectedAudioInput }
+            : undefined,
+          sampleRate: SAMPLE_RATE,
+          channelCount:
+            requestedChannelCount === 2 ? { exact: 2 } : 1,
+          echoCancellation: false,
+          autoGainControl: false,
+          noiseSuppression: false,
+        },
+      });
+
+      if (captureRequestIdRef.current !== requestId) {
+        newStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const audioTrack = newStream.getAudioTracks()[0];
+      if (!audioTrack) {
+        throw new Error("The selected input did not provide an audio track.");
+      }
+
+      try {
+        await refreshAudioDevices();
+      } catch (error) {
+        console.error("Failed to refresh audio devices.", error);
+      }
+
+      const settings = audioTrack.getSettings();
+      const actualChannelCount = settings.channelCount ?? 0;
+      if (requestedChannelCount === 2 && actualChannelCount < 2) {
+        throw new Error(
+          "SO2R requires a verified stereo input. The selected device did not report two captured channels.",
+        );
+      }
+
+      setCaptureInfo({
+        requestedChannelCount,
+        channelCount: actualChannelCount || requestedChannelCount,
+        sampleRate: settings.sampleRate ?? null,
+      });
+      setStream(newStream);
+      newStream = null;
+
+    } catch (error) {
+      newStream?.getTracks().forEach((track) => track.stop());
+      if (captureRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const isStereoConstraintFailure =
+        requestedChannelCount === 2 &&
+        error instanceof DOMException &&
+        error.name === "OverconstrainedError";
+      const message = isStereoConstraintFailure
+        ? "SO2R requires a stereo input device. The selected input could not provide two channels."
+        : error instanceof Error
+          ? error.message
+          : "Failed to start the selected audio input.";
+      setCaptureError(message);
+    } finally {
+      if (captureRequestIdRef.current === requestId) {
+        setIsStarting(false);
+      }
+    }
   };
 
   const loadError = isPileup
     ? (pileupDetectionLoadError ?? pileupLoadError)
+    : isSo2r
+    ? (so2rLeftDecoder.loadError ?? so2rRightDecoder.loadError)
     : isBenchmark
     ? null
     : (normalLoadError ?? streamingLoadError);
   const isLoading = isPileup
     ? !pileupLoaded || !pileupDetectionLoaded
+    : isSo2r
+    ? !so2rLeftDecoder.loaded || !so2rRightDecoder.loaded
     : isBenchmark
     ? false
     : !loaded || (language === "EN/JA" && !loadedJa);
   const showJapaneseDisplay = mode === "normal" && language === "EN/JA";
-  const isActive = isBenchmark
-    ? false
-    : isPileup
-    ? isPileupDecoding || isPileupDetecting
-    : isDecoding;
+  const isActive = !isBenchmark && (stream !== null || isStarting);
   const scopeHeight = isPileup ? 768 : 256;
   const isWideViewport = useMediaQuery("(min-width: 801px)", true, {
     getInitialValueInEffect: false,
@@ -285,24 +538,67 @@ export const Decoder = () => {
       getInitialValueInEffect: false,
     },
   );
+  const showControlsBesideContent = showSideControls && !isSo2r;
   const decoderEdgePadding = isWideViewport ? 8 : 0;
-  const controlJustify = showSideControls ? "flex-start" : "flex-end";
-  const controlPanelStyle = showSideControls
+  const controlJustify = showControlsBesideContent ? "flex-start" : "flex-end";
+  const controlPanelStyle = showControlsBesideContent
     ? { width: "420px", maxWidth: "100%" }
     : undefined;
-  const controlRowStyle = showSideControls ? { width: "100%" } : undefined;
+  const controlRowStyle = showControlsBesideContent
+    ? { width: "100%" }
+    : undefined;
   const contentWidthSelectStyle = { width: "fit-content" } as const;
 
   const mainContent = isBenchmark ? (
     <BenchmarkPanel />
+  ) : isSo2r ? (
+    <Box px={decoderEdgePadding}>
+      <Box
+        style={{
+          display: "grid",
+          gridTemplateColumns: isWideViewport
+            ? "repeat(2, minmax(0, 1fr))"
+            : "minmax(0, 1fr)",
+          gap: "var(--mantine-spacing-sm)",
+          alignItems: "stretch",
+        }}
+      >
+        <So2rRadioPanel
+          label="LEFT RADIO"
+          channelIndex={0}
+          stream={decoderStream}
+          filterFreq={so2rLeftFilterFreq}
+          setFilterFreq={setSo2rLeftFilterFreq}
+          filterWidth={so2rLeftFilterWidth}
+          setFilterWidth={setSo2rLeftFilterWidth}
+          decodeWindowSeconds={so2rLeftWindowSeconds}
+          setDecodeWindowSeconds={setSo2rLeftWindowSeconds}
+          backend={backend}
+          decoder={so2rLeftDecoder}
+        />
+        <So2rRadioPanel
+          label="RIGHT RADIO"
+          channelIndex={1}
+          stream={decoderStream}
+          filterFreq={so2rRightFilterFreq}
+          setFilterFreq={setSo2rRightFilterFreq}
+          filterWidth={so2rRightFilterWidth}
+          setFilterWidth={setSo2rRightFilterWidth}
+          decodeWindowSeconds={so2rRightWindowSeconds}
+          setDecodeWindowSeconds={setSo2rRightWindowSeconds}
+          backend={backend}
+          decoder={so2rRightDecoder}
+        />
+      </Box>
+    </Box>
   ) : (
     <Stack gap={0}>
       <Box px={decoderEdgePadding}>
         <Flex gap={0}>
           <Box pos="relative" style={{ flex: 1, minWidth: 0 }}>
-            {stream ? (
+            {decoderStream ? (
               <Scope
-                stream={stream}
+                stream={decoderStream}
                 setFilterFreq={setFilterFreq}
                 filterFreq={isPileup ? null : filterFreq}
                 filterWidth={filterWidth}
@@ -325,7 +621,7 @@ export const Decoder = () => {
                 }}
               />
             )}
-            {isPileup && stream && (
+            {isPileup && decoderStream && (
               <PileupOverlay
                 tracks={pileupTracks}
                 textMap={textMap}
@@ -391,7 +687,7 @@ export const Decoder = () => {
   const controlPanel = (
     <Stack
       gap="xs"
-      align={showSideControls ? "flex-start" : "flex-end"}
+      align={showControlsBesideContent ? "flex-start" : "flex-end"}
       style={controlPanelStyle}
     >
       <Flex
@@ -404,7 +700,12 @@ export const Decoder = () => {
           label="MODE"
           data={[
             { value: "normal", label: "Normal" },
-            { value: "pileup", label: "Pileup" },
+            { value: "so2r", label: "SO2R" },
+            {
+              value: "pileup",
+              label: "Pileup (model unavailable)",
+              disabled: true,
+            },
             { value: "benchmark", label: "Benchmark" },
           ]}
           value={mode}
@@ -447,26 +748,43 @@ export const Decoder = () => {
             wrap="wrap"
             style={controlRowStyle}
           >
-            <Tooltip label="Available after starting the decoder." withArrow>
+            <Tooltip
+              label={
+                isSo2r
+                  ? "If the list is empty, click START once to grant microphone access."
+                  : "Select the audio input to capture."
+              }
+              withArrow
+            >
               <Box>
                 <NativeSelect
                   w={200}
-                  label="INPUT"
-                  data={audioInputDevices.map((device) => ({
-                    value: device.deviceId,
-                    label:
-                      device.label ||
-                      `Device ${audioInputDevices.indexOf(device) + 1}`,
-                  }))}
+                  label={isSo2r ? "STEREO INPUT" : "INPUT"}
+                  data={[
+                    {
+                      value: "",
+                      label:
+                        audioInputDevices.length === 0
+                          ? "Click START to list inputs"
+                          : "Select input",
+                      disabled: true,
+                    },
+                    ...audioInputDevices.map((device) => ({
+                      value: device.deviceId,
+                      label:
+                        device.label ||
+                        `Device ${audioInputDevices.indexOf(device) + 1}`,
+                    })),
+                  ]}
                   value={selectedAudioInput}
                   onChange={(event) =>
                     setSelectedAudioInput(event.currentTarget.value)
                   }
-                  disabled={!stream}
+                  disabled={isStarting || audioInputDevices.length === 0}
                 />
               </Box>
             </Tooltip>
-            {isPassthroughSupported && (
+            {isPassthroughSupported && !isSo2r && (
               <NativeSelect
                 w={200}
                 label="THRU"
@@ -486,6 +804,11 @@ export const Decoder = () => {
                 disabled={!stream}
               />
             )}
+            {isSo2r && (
+              <Text size="xs" c="dimmed" maw={200}>
+                THRU is disabled in SO2R to preserve left/right isolation.
+              </Text>
+            )}
           </Flex>
           <Flex
             gap="md"
@@ -493,7 +816,7 @@ export const Decoder = () => {
             wrap="wrap"
             style={controlRowStyle}
           >
-            {!isPileup && (
+            {!isPileup && !isSo2r && (
               <>
                 <NativeSelect
                   label="WINDOW"
@@ -542,7 +865,14 @@ export const Decoder = () => {
                 </Tooltip>
                 <NativeSelect
                   label="CW LANG"
-                  data={["EN", "EN/JA"]}
+                  data={[
+                    { value: "EN", label: "EN" },
+                    {
+                      value: "EN/JA",
+                      label: "EN/JA (model unavailable)",
+                      disabled: true,
+                    },
+                  ]}
                   value={language}
                   onChange={(event) => {
                     const nextLanguage = parseStringOption(
@@ -556,6 +886,11 @@ export const Decoder = () => {
                   style={contentWidthSelectStyle}
                 />
               </>
+            )}
+            {isSo2r && (
+              <Text size="xs" c="dimmed">
+                Both radios share the selected engine and English model.
+              </Text>
             )}
           </Flex>
         </>
@@ -574,34 +909,55 @@ export const Decoder = () => {
                 color={isActive ? "red" : "indigo"}
                 onClick={() => {
                   if (isActive) {
+                    captureRequestIdRef.current += 1;
+                    stream?.getTracks().forEach((track) => track.stop());
                     setStream(null);
+                    setCaptureInfo(null);
+                    setCaptureError(null);
+                    setCaptureNotice(null);
+                    setIsStarting(false);
+                  } else if (isSo2r && !selectedAudioInput) {
+                    void prepareAudioInputSelection();
                   } else {
-                    getStream(selectedAudioInput ?? undefined);
+                    void getStream(selectedAudioInput || undefined);
                   }
                 }}
-                disabled={isLoading}
+                disabled={!isActive && isLoading}
               >
                 {isActive ? "STOP" : "START"}
               </Button>
               <Box style={{ flex: 1, minWidth: 0, maxWidth: "400px" }}>
                 <LoadProgressBars progress={loadProgress} />
+                {isSo2r && captureInfo ? (
+                  <Text size="xs" c="dimmed">
+                    CAPTURE: {captureInfo.channelCount} channels ·{" "}
+                    {captureInfo.sampleRate == null
+                      ? "sample rate not reported"
+                      : `${captureInfo.sampleRate.toLocaleString()} Hz`}
+                  </Text>
+                ) : null}
               </Box>
-              {loadError && (
+              {(captureError ?? loadError) && (
                 <Box
                   style={{
                     color: "var(--mantine-color-red-4)",
                     fontSize: "14px",
                   }}
                 >
-                  {loadError}
+                  {captureError ?? loadError}
                 </Box>
               )}
+              {captureNotice && !captureError && !loadError ? (
+                <Text size="xs" c="dimmed">
+                  {captureNotice}
+                </Text>
+              ) : null}
             </Flex>
           </Flex>
         </Box>
       )}
 
-      {showSideControls ? (
+      {showControlsBesideContent ? (
         <Flex gap="md" align="flex-start">
           <Box style={{ flex: 1, minWidth: 0 }}>{mainContent}</Box>
           <Box pr={8}>{controlPanel}</Box>

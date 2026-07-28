@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AUDIO_CHUNK_SAMPLES,
-  FFT_LENGTH,
   HOP_LENGTH,
   SAMPLE_RATE,
 } from "../const";
@@ -16,6 +15,10 @@ import type {
   InferenceCharacterSpan,
   InferenceWordSpaceSpan,
 } from "../utils/inferenceProtocol";
+import {
+  getIsolatedAudioChannel,
+  getProcessorInputChannelCount,
+} from "../utils/audioChannels";
 
 const STREAMING_MAX_SEGMENT_SECONDS = 30;
 const STREAMING_TAIL_GUARD_SECONDS = 1.25;
@@ -43,6 +46,8 @@ type UseStreamingDecodeParams = {
   stream: MediaStream | null;
   language: DecoderLanguage;
   backend: InferenceBackend;
+  channelIndex?: number;
+  inputChannelCount?: number;
   enabled?: boolean;
 };
 
@@ -108,7 +113,7 @@ function dropLeadingSamples(
 
 function getSpanSplitSample(span: InferenceWordSpaceSpan): number {
   const midFrame = (span.startFrame + span.endFrame) / 2;
-  return Math.round(midFrame * HOP_LENGTH + FFT_LENGTH / 2);
+  return Math.round(midFrame * HOP_LENGTH);
 }
 
 function getConfirmedSplitPoint(
@@ -310,6 +315,8 @@ export const useStreamingDecode = ({
   stream,
   language,
   backend,
+  channelIndex = 0,
+  inputChannelCount = 1,
   enabled = true,
 }: UseStreamingDecodeParams): UseStreamingDecodeResult => {
   const [loadedEnSignature, setLoadedEnSignature] = useState<string | null>(
@@ -342,8 +349,8 @@ export const useStreamingDecode = ({
       return null;
     }
 
-    return stream.id;
-  }, [enabled, stream]);
+    return `${stream.id}|${channelIndex}`;
+  }, [channelIndex, enabled, stream]);
   const decodeSettingsSignature = useMemo(() => {
     if (!enabled || !stream) {
       return null;
@@ -352,10 +359,19 @@ export const useStreamingDecode = ({
     return [
       backend,
       language,
+      channelIndex,
       filterFreq ?? "null",
       filterWidth,
     ].join("|");
-  }, [backend, enabled, filterFreq, filterWidth, language, stream]);
+  }, [
+    backend,
+    channelIndex,
+    enabled,
+    filterFreq,
+    filterWidth,
+    language,
+    stream,
+  ]);
 
   useEffect(() => {
     setLoadError(null);
@@ -470,12 +486,16 @@ export const useStreamingDecode = ({
     const source = audioContext.createMediaStreamSource(stream);
     const scriptProcessor = audioContext.createScriptProcessor(
       AUDIO_CHUNK_SAMPLES,
-      1,
+      getProcessorInputChannelCount(channelIndex, inputChannelCount),
       1,
     );
+    scriptProcessor.channelInterpretation = "discrete";
 
     scriptProcessor.onaudioprocess = (event) => {
-      const chunk = event.inputBuffer.getChannelData(0);
+      const chunk = getIsolatedAudioChannel(
+        event.inputBuffer,
+        channelIndex,
+      );
       pendingSamplesRef.current = appendAudioChunk(
         pendingSamplesRef.current,
         chunk.slice(),
@@ -499,7 +519,7 @@ export const useStreamingDecode = ({
         audioContextRef.current = null;
       }
     };
-  }, [enabled, stream]);
+  }, [channelIndex, enabled, inputChannelCount, stream]);
 
   useEffect(() => {
     const ready =

@@ -127,10 +127,14 @@ export const NumToChar = Object.fromEntries(
   ENGLISH_CONFIG.VOCABULARY.map((char, i) => [i, char]),
 );
 
-export const FFT_LENGTH = 768;
-export const HOP_LENGTH = 192;
 export const SAMPLE_RATE = 9600;
-export const BIN_RESOLUTION = SAMPLE_RATE / FFT_LENGTH;
+export const MODEL_SAMPLE_RATE = 3200;
+export const MODEL_FFT_LENGTH = 256;
+export const MODEL_HOP_LENGTH = 48;
+export const MODEL_RESAMPLE_RATIO = SAMPLE_RATE / MODEL_SAMPLE_RATE;
+export const FFT_LENGTH = MODEL_FFT_LENGTH * MODEL_RESAMPLE_RATIO;
+export const HOP_LENGTH = MODEL_HOP_LENGTH * MODEL_RESAMPLE_RATIO;
+export const BIN_RESOLUTION = MODEL_SAMPLE_RATE / MODEL_FFT_LENGTH;
 export const AUDIO_CHUNK_SAMPLES = 2048;
 export const WIDE_LAYOUT_WIDTH_PX = 1244;
 export const DEFAULT_CONTAINER_WIDTH_PX = 800;
@@ -150,6 +154,13 @@ export const DEFAULT_DECODE_CENTER_FREQ_HZ = Math.round(
 );
 export const DEFAULT_DECODE_BANDWIDTH_HZ =
   DECODABLE_MAX_FREQ_HZ - DECODABLE_MIN_FREQ_HZ;
+export const FILTER_WIDTH_OPTIONS = [
+  100,
+  150,
+  250,
+  500,
+  DEFAULT_DECODE_BANDWIDTH_HZ,
+] as const;
 
 export const NARROW_SHIFT_BINS = 5;
 // A 5-bin narrow slice spans four inter-bin intervals between outer bin centers.
