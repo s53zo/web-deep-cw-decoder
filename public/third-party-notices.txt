@@ -1,0 +1,22 @@
+Third-party software notices
+============================
+
+VDO.Ninja SDK 1.5.5
+--------------------
+
+Copyright (c) 2025-2026 Steve Seguin. All rights reserved.
+
+The unmodified VDO.Ninja SDK core is licensed under the Mozilla Public License
+2.0 (MPL-2.0). This Source Code Form is subject to the terms of the Mozilla
+Public License, v. 2.0. If a copy of the MPL was not distributed with this file,
+you can obtain one at https://mozilla.org/MPL/2.0/.
+
+Package: https://www.npmjs.com/package/@vdoninja/sdk/v/1.5.5
+Source for version 1.5.5: https://github.com/steveseguin/ninjasdk/tree/v1.5.5
+
+DeepCW imports the pinned npm package and does not modify the SDK source files.
+
+The software license grants no VDO.Ninja trademark rights and does not imply
+affiliation, sponsorship, or endorsement. Access to VDO.Ninja-operated signaling,
+STUN/TURN, relay, and hosted API services is separate from the SDK license and is
+subject to the service operator's terms, policies, and availability.

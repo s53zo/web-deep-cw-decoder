@@ -73,6 +73,101 @@ channels and the expected sample rate.
 
 https://github.com/user-attachments/assets/ab01b136-e23f-42ae-a7ce-93f1839e5d48
 
+## SO2R stereo over the LAN
+
+DeepCW can receive the two radio channels directly from a Windows computer with
+[VDO.Ninja](https://vdo.ninja/). The Mac does not need SonoBus, BlackHole, tab
+capture, or another native audio application. The Windows browser only captures
+and transports audio; model preprocessing and CW inference still run entirely in
+DeepCW on the Mac.
+
+Use a current stable version of Chrome or Edge on Windows and Chrome on macOS:
+
+1. On the Mac, select **SO2R**, then set **SO2R INPUT SOURCE** to
+   **Network stereo**.
+2. Keep the generated private stream ID, or enter another 1–64 character ID made
+   from letters, numbers, and underscores.
+3. Select **COPY WINDOWS LINK** and transfer the link to the Windows computer.
+   Treat the link like a temporary password; generate a new ID instead of sharing
+   or permanently publishing it.
+4. Select **CONNECT** on the Mac. It is safe to connect before or after starting
+   the Windows sender.
+5. Open the copied link in Chrome or Edge on Windows, allow microphone access,
+   select the stereo interface, and start sharing. The link disables video,
+   echo cancellation, automatic gain, noise suppression, and discontinuous
+   transmission while requesting two 48 kHz input channels.
+6. Wait for DeepCW to show **CONNECTED** and **CHANNELS: 2**. Decoding does not
+   begin until the received stream has positive stereo evidence from the audio
+   track or negotiated WebRTC codec.
+
+The status panel reports only runtime evidence. **CODEC** and **RATE** come from
+the received RTP codec, while **PATH** says **DIRECT P2P** only when WebRTC
+statistics identify a selected non-relay candidate pair. **TURN RELAY** means the
+media is using a relay instead of staying on the direct LAN path.
+
+### Transport quality and privacy
+
+The receiver uses the official `@vdoninja/sdk` package pinned at version 1.5.5.
+That SDK is MPL-2.0 licensed and its package source remains unmodified;
+attribution, license, and source information are preserved in
+[`public/third-party-notices.txt`](public/third-party-notices.txt). VDO.Ninja's
+public WebSocket service performs the initial signaling, so an internet
+connection is normally required to establish a session. WebRTC media is encrypted
+and attempts a direct peer-to-peer path; the status panel shows when a TURN relay
+is actually selected. DeepCW is not affiliated with or endorsed by VDO.Ninja;
+access to its hosted signaling and relay services is separate from the SDK license
+and remains subject to the operator's terms, policies, and availability.
+
+SDK 1.5.5 does not expose viewer codec or stereo preferences in its public API.
+DeepCW therefore installs a small application-side answer adapter on the pinned
+SDK instance: it prefers PCM/L16 when both browsers offer it, otherwise it requests
+stereo Opus at 48 kHz with DTX disabled and a 256 kbit/s target. The SDK package
+itself is not modified. DeepCW displays **PCM/L16** only if WebRTC runtime
+statistics prove that PCM was negotiated. PCM avoids lossy compression but has no
+packet-loss protection and can click when packets are lost; high-bitrate Opus
+provides better error resilience. Neither transport changes DeepCW's existing
+9.6 kHz capture path or published model preprocessing.
+
+### Verify left/right isolation before a contest
+
+Perform this test with the same Windows device and network that will be used in
+the contest:
+
+1. Send a steady 600 Hz tone to Windows input channel 1 only. The DeepCW
+   **LEFT / CHANNEL 0** meter and left scope must respond; the right meter and
+   scope must remain quiet.
+2. Remove that tone and send a 1000 Hz tone to Windows input channel 2 only. The
+   right meter and scope must respond; the left side must remain quiet.
+3. Send both tones simultaneously and confirm each remains confined to its own
+   decoder.
+4. Confirm **CHANNELS: 2**, note the reported codec and sample rate, and prefer
+   **DIRECT P2P** for the contest LAN. A relay can work, but adds an external
+   dependency.
+
+Identical signals or silence on both channels are valid and are not treated as a
+mono test. Verification is based on negotiated channel structure, not on the two
+waveforms being different.
+
+### Network stereo troubleshooting
+
+- **Mono error:** Configure the Windows recording device for two channels, select
+  the physical stereo interface in VDO.Ninja, and restart the sender. Check that
+  another application has not opened the interface exclusively.
+- **Waiting for Windows:** Confirm that the complete sender link and matching
+  stream ID are in use, the sender page has started, and both computers can reach
+  VDO.Ninja's signaling service.
+- **Silence:** Check Windows microphone privacy permission, the selected VDO.Ninja
+  input, sender mute state, interface levels, and the two DeepCW level meters.
+- **TURN relay:** Allow Chrome or Edge through Windows Defender Firewall on
+  private networks and permit peer-to-peer UDP on the LAN. A restrictive VPN or
+  firewall can force relay use.
+- **Interrupted connection or sender reload:** Leave the receiver connected while
+  restarting the sender. DeepCW enters **RECONNECTING** or **WAITING FOR WINDOWS**
+  and requests the same stream again. If it does not recover, disconnect both
+  ends, reload the sender link, and connect again.
+- **Changed stream ID:** Disconnect before editing or generating an ID, then copy
+  the newly generated sender link. Only one active sender may publish a given ID.
+
 ## DeepCW Engine
 
 DeepCW's CW decoding model and reference implementation are available as a separate repository:
@@ -190,4 +285,3 @@ DeepCW includes a real-time, deep-learning-based noise reduction feature designe
 In addition to decoding Morse code, DeepCW can pass the audio through a neural noise reduction model, making noisy CW signals easier to monitor by ear.
 
 Also see: https://github.com/e04/HamNoise
-

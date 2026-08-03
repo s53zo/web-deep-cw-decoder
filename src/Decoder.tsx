@@ -26,12 +26,14 @@ import { usePileupDetection } from "./hooks/usePileupDetection";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { useStreamingDecode } from "./hooks/useStreamingDecode";
 import { useSo2rChannel } from "./hooks/useSo2rChannel";
+import { useVdoNinjaStereo } from "./hooks/useVdoNinjaStereo";
 import { DecodeDisplay } from "./DecodeDisplay";
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { LoadProgressBars } from "./LoadProgressBars";
 import { PileupOverlay } from "./PileupOverlay";
 import { StreamingTranscriptDisplay } from "./StreamingTranscriptDisplay";
 import { So2rRadioPanel } from "./So2rRadioPanel";
+import { NetworkStereoControls } from "./NetworkStereoControls";
 import type { PileupTrack } from "./utils/pileupCandidates";
 import {
   Box,
@@ -47,6 +49,11 @@ import {
   type InferenceBackend,
 } from "./utils/inferenceProtocol";
 import {
+  buildVdoNinjaSenderUrl,
+  generateSecureStreamId,
+  validateStreamId,
+} from "./utils/networkStereo";
+import {
   hasMatchingOption,
   parseNumberOption,
   parseStringOption,
@@ -54,12 +61,14 @@ import {
 
 type DecoderMode = "normal" | "so2r" | "pileup" | "benchmark";
 type DecoderLanguage = "EN" | "EN/JA";
+type So2rInputSource = "local" | "network";
 
 const MODE_OPTIONS = ["normal", "so2r", "pileup", "benchmark"] as const;
 const AVAILABLE_MODE_OPTIONS = ["normal", "so2r", "benchmark"] as const;
 const LANGUAGE_OPTIONS: readonly DecoderLanguage[] = ["EN", "EN/JA"];
 const BACKEND_OPTIONS: readonly InferenceBackend[] =
   INFERENCE_BACKEND_OPTIONS.map((option) => option.value);
+const SO2R_INPUT_SOURCE_OPTIONS = ["local", "network"] as const;
 
 type CaptureInfo = {
   requestedChannelCount: 1 | 2;
@@ -85,6 +94,18 @@ export const Decoder = () => {
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [captureNotice, setCaptureNotice] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  const [so2rInputSource, setSo2rInputSourceState] =
+    usePersistedState<So2rInputSource>(
+      "decoder.so2r.inputSource",
+      "local",
+      (value): value is So2rInputSource =>
+        hasMatchingOption(value, SO2R_INPUT_SOURCE_OPTIONS),
+    );
+  const [networkStreamId, setNetworkStreamId] = useState(() =>
+    generateSecureStreamId(),
+  );
+  const networkStereo = useVdoNinjaStereo();
+  const disconnectNetworkStereo = networkStereo.disconnect;
   const [filterFreq, setFilterFreq] = useState(DEFAULT_DECODE_CENTER_FREQ_HZ);
   const [filterWidth, setFilterWidth] = usePersistedState<number>(
     "decoder.filterWidth",
@@ -175,7 +196,14 @@ export const Decoder = () => {
   const isSo2r = mode === "so2r";
   const isPileup = mode === "pileup";
   const isBenchmark = mode === "benchmark";
-  const decoderStream =
+  const isNetworkSo2r = isSo2r && so2rInputSource === "network";
+  let networkSenderUrl: string | null = null;
+  try {
+    networkSenderUrl = buildVdoNinjaSenderUrl(networkStreamId);
+  } catch {
+    networkSenderUrl = null;
+  }
+  const localDecoderStream =
     stream &&
     captureInfo &&
     (isSo2r
@@ -183,6 +211,9 @@ export const Decoder = () => {
       : captureInfo.requestedChannelCount === 1)
       ? stream
       : null;
+  const decoderStream = isNetworkSo2r
+    ? networkStereo.stream
+    : localDecoderStream;
   const {
     isSupported: isPassthroughSupported,
     audioOutputDevices,
@@ -249,12 +280,13 @@ export const Decoder = () => {
 
     captureRequestIdRef.current += 1;
     stream?.getTracks().forEach((track) => track.stop());
+    void disconnectNetworkStereo();
     setStream(null);
     setCaptureInfo(null);
     setCaptureError(null);
     setCaptureNotice(null);
     setIsStarting(false);
-  }, [isBenchmark, mode, stream]);
+  }, [disconnectNetworkStereo, isBenchmark, mode, stream]);
 
   useEffect(
     () => () => {
@@ -372,6 +404,34 @@ export const Decoder = () => {
     setCaptureNotice(null);
     if (stream) {
       void getStream(deviceId);
+    }
+  };
+
+  const setSo2rInputSource = (source: So2rInputSource) => {
+    if (source === so2rInputSource) return;
+    captureRequestIdRef.current += 1;
+    stream?.getTracks().forEach((track) => track.stop());
+    setStream(null);
+    setCaptureInfo(null);
+    setCaptureError(null);
+    setCaptureNotice(null);
+    setIsStarting(false);
+    void networkStereo.disconnect();
+    setSo2rInputSourceState(source);
+  };
+
+  const connectNetworkStereo = async () => {
+    try {
+      const streamId = validateStreamId(networkStreamId);
+      setCaptureError(null);
+      setCaptureNotice(null);
+      await networkStereo.connect(streamId);
+    } catch (error) {
+      setCaptureError(
+        error instanceof Error
+          ? error.message
+          : "Failed to start the network stereo receiver.",
+      );
     }
   };
 
@@ -526,7 +586,9 @@ export const Decoder = () => {
     ? false
     : !loaded || (language === "EN/JA" && !loadedJa);
   const showJapaneseDisplay = mode === "normal" && language === "EN/JA";
-  const isActive = !isBenchmark && (stream !== null || isStarting);
+  const isActive =
+    !isBenchmark &&
+    (isNetworkSo2r ? networkStereo.isActive : stream !== null || isStarting);
   const scopeHeight = isPileup ? 768 : 256;
   const isWideViewport = useMediaQuery("(min-width: 801px)", true, {
     getInitialValueInEffect: false,
@@ -748,42 +810,63 @@ export const Decoder = () => {
             wrap="wrap"
             style={controlRowStyle}
           >
-            <Tooltip
-              label={
-                isSo2r
-                  ? "If the list is empty, click START once to grant microphone access."
-                  : "Select the audio input to capture."
-              }
-              withArrow
-            >
-              <Box>
-                <NativeSelect
-                  w={200}
-                  label={isSo2r ? "STEREO INPUT" : "INPUT"}
-                  data={[
-                    {
-                      value: "",
-                      label:
-                        audioInputDevices.length === 0
-                          ? "Click START to list inputs"
-                          : "Select input",
-                      disabled: true,
-                    },
-                    ...audioInputDevices.map((device) => ({
-                      value: device.deviceId,
-                      label:
-                        device.label ||
-                        `Device ${audioInputDevices.indexOf(device) + 1}`,
-                    })),
-                  ]}
-                  value={selectedAudioInput}
-                  onChange={(event) =>
-                    setSelectedAudioInput(event.currentTarget.value)
-                  }
-                  disabled={isStarting || audioInputDevices.length === 0}
-                />
-              </Box>
-            </Tooltip>
+            {isSo2r ? (
+              <NativeSelect
+                w={220}
+                label="SO2R INPUT SOURCE"
+                data={[
+                  { value: "local", label: "Local stereo device" },
+                  { value: "network", label: "Network stereo" },
+                ]}
+                value={so2rInputSource}
+                onChange={(event) => {
+                  const nextSource = parseStringOption(
+                    event.currentTarget.value,
+                    SO2R_INPUT_SOURCE_OPTIONS,
+                  );
+                  if (nextSource !== undefined) setSo2rInputSource(nextSource);
+                }}
+                disabled={isStarting}
+              />
+            ) : null}
+            {!isNetworkSo2r ? (
+              <Tooltip
+                label={
+                  isSo2r
+                    ? "If the list is empty, click START once to grant microphone permission."
+                    : "Select the audio input to capture."
+                }
+                withArrow
+              >
+                <Box>
+                  <NativeSelect
+                    w={200}
+                    label={isSo2r ? "STEREO INPUT" : "INPUT"}
+                    data={[
+                      {
+                        value: "",
+                        label:
+                          audioInputDevices.length === 0
+                            ? "Click START to list inputs"
+                            : "Select input",
+                        disabled: true,
+                      },
+                      ...audioInputDevices.map((device) => ({
+                        value: device.deviceId,
+                        label:
+                          device.label ||
+                          `Device ${audioInputDevices.indexOf(device) + 1}`,
+                      })),
+                    ]}
+                    value={selectedAudioInput}
+                    onChange={(event) =>
+                      setSelectedAudioInput(event.currentTarget.value)
+                    }
+                    disabled={isStarting || audioInputDevices.length === 0}
+                  />
+                </Box>
+              </Tooltip>
+            ) : null}
             {isPassthroughSupported && !isSo2r && (
               <NativeSelect
                 w={200}
@@ -810,6 +893,21 @@ export const Decoder = () => {
               </Text>
             )}
           </Flex>
+          {isNetworkSo2r ? (
+            <NetworkStereoControls
+              streamId={networkStreamId}
+              setStreamId={setNetworkStreamId}
+              senderUrl={networkSenderUrl}
+              onGenerateStreamId={() =>
+                setNetworkStreamId(generateSecureStreamId())
+              }
+              phase={networkStereo.phase}
+              statusLabel={networkStereo.statusLabel}
+              diagnostics={networkStereo.diagnostics}
+              levels={networkStereo.levels}
+              disabled={networkStereo.isActive}
+            />
+          ) : null}
           <Flex
             gap="md"
             justify={controlJustify}
@@ -908,7 +1006,13 @@ export const Decoder = () => {
                 w={200}
                 color={isActive ? "red" : "indigo"}
                 onClick={() => {
-                  if (isActive) {
+                  if (isNetworkSo2r) {
+                    if (networkStereo.isActive) {
+                      void networkStereo.disconnect();
+                    } else {
+                      void connectNetworkStereo();
+                    }
+                  } else if (isActive) {
                     captureRequestIdRef.current += 1;
                     stream?.getTracks().forEach((track) => track.stop());
                     setStream(null);
@@ -924,11 +1028,17 @@ export const Decoder = () => {
                 }}
                 disabled={!isActive && isLoading}
               >
-                {isActive ? "STOP" : "START"}
+                {isNetworkSo2r
+                  ? networkStereo.isActive
+                    ? "DISCONNECT"
+                    : "CONNECT"
+                  : isActive
+                    ? "STOP"
+                    : "START"}
               </Button>
               <Box style={{ flex: 1, minWidth: 0, maxWidth: "400px" }}>
                 <LoadProgressBars progress={loadProgress} />
-                {isSo2r && captureInfo ? (
+                {isSo2r && !isNetworkSo2r && captureInfo ? (
                   <Text size="xs" c="dimmed">
                     CAPTURE: {captureInfo.channelCount} channels ·{" "}
                     {captureInfo.sampleRate == null
@@ -937,17 +1047,20 @@ export const Decoder = () => {
                   </Text>
                 ) : null}
               </Box>
-              {(captureError ?? loadError) && (
+              {(captureError ?? networkStereo.error ?? loadError) && (
                 <Box
                   style={{
                     color: "var(--mantine-color-red-4)",
                     fontSize: "14px",
                   }}
                 >
-                  {captureError ?? loadError}
+                  {captureError ?? networkStereo.error ?? loadError}
                 </Box>
               )}
-              {captureNotice && !captureError && !loadError ? (
+              {captureNotice &&
+              !isNetworkSo2r &&
+              !captureError &&
+              !loadError ? (
                 <Text size="xs" c="dimmed">
                   {captureNotice}
                 </Text>

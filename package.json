@@ -19,6 +19,7 @@
     "@fontsource/roboto-mono": "^5.2.8",
     "@mantine/core": "^8.2.7",
     "@mantine/hooks": "^8.2.7",
+    "@vdoninja/sdk": "1.5.5",
     "onnxruntime-web": "1.24.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
