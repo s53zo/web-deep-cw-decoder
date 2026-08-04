@@ -4,6 +4,7 @@ import {
   getIsolatedAudioChannel,
   getProcessorInputChannelCount,
 } from "../utils/audioChannels";
+import { registerAudioContext } from "../utils/audioContextActivation";
 
 export type AudioBufferState = {
   samples: Float32Array;
@@ -64,11 +65,13 @@ export function useAudioProcessing(
 
     source.connect(scriptProcessor);
     scriptProcessor.connect(audioContext.destination);
+    const unregisterAudioContext = registerAudioContext(audioContext);
 
     audioContextRef.current = audioContext;
     scriptProcessorRef.current = scriptProcessor;
 
     return () => {
+      unregisterAudioContext();
       if (scriptProcessorRef.current) {
         scriptProcessorRef.current.disconnect();
         scriptProcessorRef.current = null;

@@ -1,4 +1,5 @@
 export const VDO_NINJA_SENDER_ORIGIN = "https://vdo.ninja/";
+export const NETWORK_STEREO_STREAM_ID = "S53M_Vaneca";
 
 export type NetworkStereoPhase =
   | "idle"
@@ -54,17 +55,6 @@ export type RTCStatsLike = {
 };
 
 const STREAM_ID_PATTERN = /^[A-Za-z0-9_]{1,64}$/;
-
-export function generateSecureStreamId(
-  cryptoSource: Pick<Crypto, "getRandomValues"> = crypto,
-): string {
-  const bytes = new Uint8Array(16);
-  cryptoSource.getRandomValues(bytes);
-  const randomHex = Array.from(bytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  return `deepcw_${randomHex}`;
-}
 
 export function validateStreamId(value: string): string {
   const streamId = value.trim();

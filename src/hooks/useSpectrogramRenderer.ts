@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { MIN_FREQ_HZ, MAX_FREQ_HZ } from "../const";
+import { registerAudioContext } from "../utils/audioContextActivation";
 import { buildColorLUT } from "../utils/colorUtils";
 
 const BACKGROUND_RENDER_INTERVAL_MS = 1000 / 30;
@@ -112,6 +113,7 @@ export const useSpectrogramRenderer = ({
     // Route exactly one physical input channel into this radio's analyser.
     source.connect(splitter);
     splitter.connect(analyser, channelIndex, 0);
+    const unregisterAudioContext = registerAudioContext(audioCtx);
 
     nodesRef.current = { audioCtx, source, splitter, analyser };
 
@@ -328,6 +330,7 @@ export const useSpectrogramRenderer = ({
     scheduleNextRender(() => void render());
 
     return () => {
+      unregisterAudioContext();
       cancelScheduledRender();
       resizeObserver.disconnect();
       invalidateRenderResources();

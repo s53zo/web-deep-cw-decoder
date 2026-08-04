@@ -19,6 +19,7 @@ import { Scope } from "./Scope";
 import { useDecode } from "./useDecode";
 import { useAudioProcessing } from "./hooks/useAudioProcessing";
 import { useAudioPassthrough } from "./hooks/useAudioPassthrough";
+import { useAudioContextActivation } from "./hooks/useAudioContextActivation";
 import { useFilteredPassthroughStream } from "./hooks/useFilteredPassthroughStream";
 import { useLoadProgress } from "./hooks/useLoadProgress";
 import { usePileupDecode } from "./hooks/usePileupDecode";
@@ -50,7 +51,7 @@ import {
 } from "./utils/inferenceProtocol";
 import {
   buildVdoNinjaSenderUrl,
-  generateSecureStreamId,
+  NETWORK_STEREO_STREAM_ID,
   validateStreamId,
 } from "./utils/networkStereo";
 import {
@@ -101,10 +102,9 @@ export const Decoder = () => {
       (value): value is So2rInputSource =>
         hasMatchingOption(value, SO2R_INPUT_SOURCE_OPTIONS),
     );
-  const [networkStreamId, setNetworkStreamId] = useState(() =>
-    generateSecureStreamId(),
-  );
+  const networkStreamId = NETWORK_STEREO_STREAM_ID;
   const networkStereo = useVdoNinjaStereo();
+  const audioContextActivation = useAudioContextActivation();
   const disconnectNetworkStereo = networkStereo.disconnect;
   const [filterFreq, setFilterFreq] = useState(DEFAULT_DECODE_CENTER_FREQ_HZ);
   const [filterWidth, setFilterWidth] = usePersistedState<number>(
@@ -896,16 +896,13 @@ export const Decoder = () => {
           {isNetworkSo2r ? (
             <NetworkStereoControls
               streamId={networkStreamId}
-              setStreamId={setNetworkStreamId}
               senderUrl={networkSenderUrl}
-              onGenerateStreamId={() =>
-                setNetworkStreamId(generateSecureStreamId())
-              }
               phase={networkStereo.phase}
               statusLabel={networkStereo.statusLabel}
               diagnostics={networkStereo.diagnostics}
               levels={networkStereo.levels}
-              disabled={networkStereo.isActive}
+              audioActivationState={audioContextActivation.state}
+              onEnableMacAudio={audioContextActivation.resume}
             />
           ) : null}
           <Flex

@@ -85,11 +85,11 @@ Use a current stable version of Chrome or Edge on Windows and Chrome on macOS:
 
 1. On the Mac, select **SO2R**, then set **SO2R INPUT SOURCE** to
    **Network stereo**.
-2. Keep the generated private stream ID, or enter another 1–64 character ID made
-   from letters, numbers, and underscores.
-3. Select **COPY WINDOWS LINK** and transfer the link to the Windows computer.
-   Treat the link like a temporary password; generate a new ID instead of sharing
-   or permanently publishing it.
+2. DeepCW uses the fixed, case-sensitive stream ID **S53M_Vaneca**. Only one
+   Windows sender should publish this ID at a time.
+3. Select **COPY WINDOWS LINK** and transfer the fixed link to the Windows
+   computer. Treat the link like a password because anyone who knows the ID can
+   attempt to view or publish the stream.
 4. Select **CONNECT** on the Mac. It is safe to connect before or after starting
    the Windows sender.
 5. Open the copied link in Chrome or Edge on Windows, allow microphone access,
@@ -98,7 +98,14 @@ Use a current stable version of Chrome or Edge on Windows and Chrome on macOS:
    transmission while requesting two 48 kHz input channels.
 6. Wait for DeepCW to show **CONNECTED** and **CHANNELS: 2**. Decoding does not
    begin until the received stream has positive stereo evidence from the audio
-   track or negotiated WebRTC codec.
+   track or negotiated WebRTC codec. If Chrome pauses Web Audio, select
+   **ENABLE MAC AUDIO** once to start the meters, waterfalls, and both decoders.
+
+The permanent Windows sender link is:
+
+```text
+https://vdo.ninja/?push=S53M_Vaneca&vd=0&stereo=1&proaudio=1&inputchannels=2&micsamplerate=48000&aec=0&agc=0&denoise=0&voiceisolation=0&oab=256
+```
 
 The status panel reports only runtime evidence. **CODEC** and **RATE** come from
 the received RTP codec, while **PATH** says **DIRECT P2P** only when WebRTC
@@ -157,7 +164,8 @@ waveforms being different.
   stream ID are in use, the sender page has started, and both computers can reach
   VDO.Ninja's signaling service.
 - **Silence:** Check Windows microphone privacy permission, the selected VDO.Ninja
-  input, sender mute state, interface levels, and the two DeepCW level meters.
+  input, sender mute state, interface levels, and the two DeepCW level meters. If
+  **ENABLE MAC AUDIO** is visible, select it once.
 - **TURN relay:** Allow Chrome or Edge through Windows Defender Firewall on
   private networks and permit peer-to-peer UDP on the LAN. A restrictive VPN or
   firewall can force relay use.
@@ -165,8 +173,8 @@ waveforms being different.
   restarting the sender. DeepCW enters **RECONNECTING** or **WAITING FOR WINDOWS**
   and requests the same stream again. If it does not recover, disconnect both
   ends, reload the sender link, and connect again.
-- **Changed stream ID:** Disconnect before editing or generating an ID, then copy
-  the newly generated sender link. Only one active sender may publish a given ID.
+- **Fixed ID already in use:** Close any old VDO.Ninja sender tabs. Only one
+  active Windows sender should publish **S53M_Vaneca** at a time.
 
 ## DeepCW Engine
 

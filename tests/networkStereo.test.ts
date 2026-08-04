@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   buildVdoNinjaSenderUrl,
   extractNetworkAudioDiagnostics,
-  generateSecureStreamId,
+  NETWORK_STEREO_STREAM_ID,
   reduceNetworkStereoPhase,
   requestStereoOpusInAnswer,
   validateStreamId,
@@ -45,20 +45,9 @@ test("creates an Opus fmtp line when the browser answer omitted one", () => {
   );
 });
 
-test("generates a private 128-bit stream identifier", () => {
-  const bytes = Array.from({ length: 16 }, (_, index) => index);
-  const cryptoSource = {
-    getRandomValues: <T extends ArrayBufferView | null>(array: T): T => {
-      assert.ok(array instanceof Uint8Array);
-      array.set(bytes);
-      return array as T;
-    },
-  };
-
-  assert.equal(
-    generateSecureStreamId(cryptoSource),
-    "deepcw_000102030405060708090a0b0c0d0e0f",
-  );
+test("uses the fixed contest stream identifier", () => {
+  assert.equal(NETWORK_STEREO_STREAM_ID, "S53M_Vaneca");
+  assert.equal(validateStreamId(NETWORK_STEREO_STREAM_ID), "S53M_Vaneca");
 });
 
 test("validates stream identifiers without silently changing them", () => {

@@ -7,24 +7,23 @@ import {
   Progress,
   Stack,
   Text,
-  TextInput,
 } from "@mantine/core";
 import type { StereoLevels } from "./hooks/useVdoNinjaStereo";
 import type {
   NetworkAudioDiagnostics,
   NetworkStereoPhase,
 } from "./utils/networkStereo";
+import type { AudioContextActivationState } from "./utils/audioContextActivation";
 
 type NetworkStereoControlsProps = {
   streamId: string;
-  setStreamId: (streamId: string) => void;
   senderUrl: string | null;
-  onGenerateStreamId: () => void;
   phase: NetworkStereoPhase;
   statusLabel: string;
   diagnostics: NetworkAudioDiagnostics;
   levels: StereoLevels;
-  disabled: boolean;
+  audioActivationState: AudioContextActivationState;
+  onEnableMacAudio: () => void;
 };
 
 function meterPercent(level: number): number {
@@ -39,14 +38,13 @@ function diagnosticValue(value: string | number | null, fallback: string) {
 
 export function NetworkStereoControls({
   streamId,
-  setStreamId,
   senderUrl,
-  onGenerateStreamId,
   phase,
   statusLabel,
   diagnostics,
   levels,
-  disabled,
+  audioActivationState,
+  onEnableMacAudio,
 }: NetworkStereoControlsProps) {
   const isError = phase === "error";
   const statusColor = isError
@@ -68,17 +66,12 @@ export function NetworkStereoControls({
     >
       <Stack gap="xs">
         <Flex gap="sm" wrap="wrap" align="flex-end">
-          <TextInput
-            label="VDO.NINJA STREAM ID"
-            value={streamId}
-            onChange={(event) => setStreamId(event.currentTarget.value)}
-            disabled={disabled}
-            error={senderUrl ? undefined : "Use 1–64 letters, numbers, or underscores"}
-            style={{ flex: "1 1 280px" }}
-          />
-          <Button variant="light" onClick={onGenerateStreamId} disabled={disabled}>
-            NEW ID
-          </Button>
+          <Box style={{ flex: "1 1 280px" }}>
+            <Text size="xs" fw={700} c="dimmed">
+              FIXED VDO.NINJA STREAM ID
+            </Text>
+            <Text>{streamId}</Text>
+          </Box>
           <CopyButton value={senderUrl ?? ""} timeout={2_000}>
             {({ copied, copy }) => (
               <Button onClick={copy} disabled={!senderUrl}>
@@ -130,6 +123,18 @@ export function NetworkStereoControls({
                 : "NOT VERIFIED"}
           </Text>
         </Flex>
+
+        {phase === "connected" && audioActivationState === "suspended" ? (
+          <Flex gap="sm" align="center" wrap="wrap">
+            <Button color="yellow" onClick={onEnableMacAudio}>
+              ENABLE MAC AUDIO
+            </Button>
+            <Text size="xs" c="yellow.4">
+              Chrome paused DeepCW audio processing. Click once to start the
+              meters, waterfalls, and both decoders.
+            </Text>
+          </Flex>
+        ) : null}
 
         <Flex gap="md" wrap="wrap">
           <Box style={{ flex: "1 1 220px" }}>

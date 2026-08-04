@@ -19,6 +19,7 @@ import {
   getIsolatedAudioChannel,
   getProcessorInputChannelCount,
 } from "../utils/audioChannels";
+import { registerAudioContext } from "../utils/audioContextActivation";
 
 const STREAMING_MAX_SEGMENT_SECONDS = 30;
 const STREAMING_TAIL_GUARD_SECONDS = 1.25;
@@ -505,11 +506,13 @@ export const useStreamingDecode = ({
 
     source.connect(scriptProcessor);
     scriptProcessor.connect(audioContext.destination);
+    const unregisterAudioContext = registerAudioContext(audioContext);
 
     audioContextRef.current = audioContext;
     scriptProcessorRef.current = scriptProcessor;
 
     return () => {
+      unregisterAudioContext();
       if (scriptProcessorRef.current) {
         scriptProcessorRef.current.disconnect();
         scriptProcessorRef.current = null;

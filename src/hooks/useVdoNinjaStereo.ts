@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type VDONinjaSDK from "@vdoninja/sdk";
 import { SAMPLE_RATE } from "../const";
+import { registerAudioContext } from "../utils/audioContextActivation";
 import { releaseNetworkStereoSession } from "../utils/networkStereoCleanup";
 import {
   extractNetworkAudioDiagnostics,
@@ -97,6 +98,7 @@ function createStereoMeterGraph(
   leftAnalyser.connect(silentOutput);
   rightAnalyser.connect(silentOutput);
   silentOutput.connect(context.destination);
+  const unregisterAudioContext = registerAudioContext(context);
 
   const leftSamples = new Float32Array(leftAnalyser.fftSize);
   const rightSamples = new Float32Array(rightAnalyser.fftSize);
@@ -112,10 +114,10 @@ function createStereoMeterGraph(
     frameId = requestAnimationFrame(update);
   };
   frameId = requestAnimationFrame(update);
-  void context.resume().catch(() => undefined);
 
   return {
     close: () => {
+      unregisterAudioContext();
       cancelAnimationFrame(frameId);
       source.disconnect();
       splitter.disconnect();
