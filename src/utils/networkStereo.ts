@@ -218,16 +218,23 @@ function getSelectedCandidatePair(stats: RTCStatsLike[]): RTCStatsLike | null {
   return nominatedPairs.length === 1 ? nominatedPairs[0] : null;
 }
 
+const DIRECT_CANDIDATE_TYPES = new Set(["host", "srflx", "prflx"]);
+
 function getRoute(stats: RTCStatsLike[]): NetworkRoute {
   const pair = getSelectedCandidatePair(stats);
   if (!pair) return null;
 
   const local = stats.find((entry) => entry.id === pair.localCandidateId);
   const remote = stats.find((entry) => entry.id === pair.remoteCandidateId);
-  if (!local && !remote) return null;
-  return local?.candidateType === "relay" || remote?.candidateType === "relay"
-    ? "relay"
-    : "direct";
+  const localType = local?.candidateType;
+  const remoteType = remote?.candidateType;
+  if (localType === "relay" || remoteType === "relay") return "relay";
+  return localType &&
+    remoteType &&
+    DIRECT_CANDIDATE_TYPES.has(localType) &&
+    DIRECT_CANDIDATE_TYPES.has(remoteType)
+    ? "direct"
+    : null;
 }
 
 function getCodecFromStats(stats: RTCStatsLike[]): RTCStatsLike | null {
@@ -306,7 +313,15 @@ export function extractNetworkAudioDiagnostics({
   let stereoEvidence: StereoEvidence = null;
   let channelCount: number | null = settingsChannels ?? null;
 
-  if (settingsChannels != null && settingsChannels >= 2) {
+  const hasMonoEvidence =
+    settingsChannels === 1 ||
+    codecChannels === 1 ||
+    (isOpus && (opusMono || negotiated.stereo === false));
+
+  if (hasMonoEvidence) {
+    stereoState = "mono";
+    channelCount = 1;
+  } else if (settingsChannels != null && settingsChannels >= 2) {
     stereoState = "stereo";
     stereoEvidence = "track-settings";
     channelCount = settingsChannels;
@@ -323,13 +338,6 @@ export function extractNetworkAudioDiagnostics({
     stereoState = "stereo";
     stereoEvidence = "negotiated-codec";
     channelCount = codecChannels;
-  } else if (
-    settingsChannels === 1 ||
-    codecChannels === 1 ||
-    (isOpus && (opusMono || negotiated.stereo === false))
-  ) {
-    stereoState = "mono";
-    channelCount = 1;
   }
 
   return {

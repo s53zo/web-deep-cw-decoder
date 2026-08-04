@@ -196,6 +196,27 @@ test("rejects a genuinely mono negotiated stream", () => {
   assert.equal(result.stereoEvidence, null);
 });
 
+test("rejects explicit mono negotiation when track settings report two channels", () => {
+  const stats = opusStats();
+  const codec = stats.find((entry) => entry.id === "codec-opus");
+  assert.ok(codec);
+  codec.sdpFmtpLine = "minptime=10;stereo=0;sprop-stereo=0";
+
+  const result = extractNetworkAudioDiagnostics({
+    report: stats,
+    trackSettings: { channelCount: 2, sampleRate: 48_000 },
+    receiverSdp: [
+      "v=0",
+      "a=rtpmap:111 opus/48000/2",
+      "a=fmtp:111 minptime=10;stereo=0;sprop-stereo=0",
+    ].join("\r\n"),
+  });
+
+  assert.equal(result.stereoState, "mono");
+  assert.equal(result.channelCount, 1);
+  assert.equal(result.stereoEvidence, null);
+});
+
 test("does not claim stereo from the Opus channel capability alone", () => {
   const stats = opusStats();
   const codec = stats.find((entry) => entry.id === "codec-opus");
@@ -246,6 +267,26 @@ test("does not guess a route when statistics contain multiple candidate pairs", 
     type: "local-candidate",
     candidateType: "relay",
   });
+
+  const result = extractNetworkAudioDiagnostics({ report: stats });
+  assert.equal(result.route, null);
+});
+
+test("does not guess a direct route when candidate type metadata is incomplete", () => {
+  const stats = opusStats();
+  const remote = stats.find((entry) => entry.id === "remote");
+  assert.ok(remote);
+  delete remote.candidateType;
+
+  const result = extractNetworkAudioDiagnostics({ report: stats });
+  assert.equal(result.route, null);
+});
+
+test("does not guess a direct route from an unrecognized candidate type", () => {
+  const stats = opusStats();
+  const remote = stats.find((entry) => entry.id === "remote");
+  assert.ok(remote);
+  remote.candidateType = "unknown";
 
   const result = extractNetworkAudioDiagnostics({ report: stats });
   assert.equal(result.route, null);
