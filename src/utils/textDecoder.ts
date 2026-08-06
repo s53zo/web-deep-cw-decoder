@@ -1,5 +1,5 @@
 import type { Tensor } from "onnxruntime-web";
-import { ENGLISH_CONFIG, JAPANESE_CONFIG } from "../const";
+import { ENGLISH_CONFIG, JAPANESE_CONFIG } from "../const.ts";
 
 type DecoderConfig = typeof ENGLISH_CONFIG | typeof JAPANESE_CONFIG;
 export type WordSpaceSpan = {
@@ -10,7 +10,11 @@ export type CharacterSpan = {
   char: string;
   startFrame: number;
   endFrame: number;
+  /** Present for Pileup results; mean selected-class probability, clamped 0..1. */
+  confidence?: number;
 };
+
+export type ConfidentCharacterSpan = CharacterSpan & { confidence: number };
 
 export type DecodedPredictionResult = {
   displayText: string;
@@ -57,15 +61,62 @@ function getDecoderConfig(lang: "en" | "ja"): DecoderConfig {
   return lang === "ja" ? JAPANESE_CONFIG : ENGLISH_CONFIG;
 }
 
-function getPredictionIndices(
+type FramePrediction = {
+  index: number;
+  confidence: number;
+};
+
+export function getClassProbability(
+  values: ArrayLike<number>,
+  selectedIndex: number,
+): number {
+  return getClassProbabilityAt(values, 0, values.length, selectedIndex);
+}
+
+function getClassProbabilityAt(
+  values: ArrayLike<number>,
+  offset: number,
+  length: number,
+  selectedIndex: number,
+): number {
+  let sum = 0;
+  let normalized = true;
+  let maximum = -Infinity;
+  for (let index = 0; index < length; index += 1) {
+    const value = Number(values[offset + index]);
+    if (!Number.isFinite(value)) return 0;
+    sum += value;
+    maximum = Math.max(maximum, value);
+    if (value < 0 || value > 1) normalized = false;
+  }
+
+  if (normalized && sum >= 0.98 && sum <= 1.02) {
+    return Math.max(
+      0,
+      Math.min(1, Number(values[offset + selectedIndex] ?? 0)),
+    );
+  }
+
+  let denominator = 0;
+  for (let index = 0; index < length; index += 1) {
+    denominator += Math.exp(Number(values[offset + index]) - maximum);
+  }
+  if (!Number.isFinite(denominator) || denominator <= 0) return 0;
+  const probability =
+    Math.exp(Number(values[offset + selectedIndex] ?? -Infinity) - maximum) /
+    denominator;
+  return Math.max(0, Math.min(1, probability));
+}
+
+function getFramePredictions(
   pred: Tensor["data"],
   predShape: Tensor["dims"],
-): number[][] {
+): FramePrediction[][] {
   const [batchSize, timeSteps, numClasses] = predShape;
-  const outputIndices: number[][] = [];
+  const outputPredictions: FramePrediction[][] = [];
 
   for (let i = 0; i < batchSize; i++) {
-    const predIndices: number[] = [];
+    const framePredictions: FramePrediction[] = [];
     for (let t = 0; t < timeSteps; t++) {
       let maxProb = -Infinity;
       let maxIndex = 0;
@@ -79,7 +130,45 @@ function getPredictionIndices(
           maxIndex = c;
         }
       }
-      predIndices.push(maxIndex);
+      framePredictions.push({
+        index: maxIndex,
+        confidence: getClassProbabilityAt(
+          pred as ArrayLike<number>,
+          offset,
+          numClasses,
+          maxIndex,
+        ),
+      });
+    }
+    outputPredictions.push(framePredictions);
+  }
+
+  return outputPredictions;
+}
+
+function getPredictionIndices(
+  pred: Tensor["data"],
+  predShape: Tensor["dims"],
+): number[][] {
+  const [batchSize, timeSteps, numClasses] = predShape;
+  const outputIndices: number[][] = [];
+
+  for (let batch = 0; batch < batchSize; batch += 1) {
+    const predIndices: number[] = [];
+    for (let frame = 0; frame < timeSteps; frame += 1) {
+      let maximum = -Infinity;
+      let maximumIndex = 0;
+      const offset =
+        batch * timeSteps * numClasses + frame * numClasses;
+      for (let classIndex = 0; classIndex < numClasses; classIndex += 1) {
+        // @ts-expect-error - Tensor data type is not properly typed
+        if (pred[offset + classIndex] > maximum) {
+          // @ts-expect-error - Tensor data type is not properly typed
+          maximum = pred[offset + classIndex];
+          maximumIndex = classIndex;
+        }
+      }
+      predIndices.push(maximumIndex);
     }
     outputIndices.push(predIndices);
   }
@@ -150,6 +239,7 @@ function getWordSpaceSpans(
 
 function getCharacterSpans(
   predIndices: number[],
+  frameConfidences: number[] | null,
   vocabulary: string[],
   blankIndex: number,
 ): CharacterSpan[] {
@@ -166,7 +256,15 @@ function getCharacterSpans(
 
     if (index === previousIndex) {
       if (activeSpanIndex >= 0) {
-        spans[activeSpanIndex].endFrame = frameIndex;
+        const span = spans[activeSpanIndex];
+        span.endFrame = frameIndex;
+        if (frameConfidences && span.confidence != null) {
+          const previousFrameCount = frameIndex - span.startFrame;
+          span.confidence =
+            (span.confidence * previousFrameCount +
+              frameConfidences[frameIndex]) /
+            (previousFrameCount + 1);
+        }
       }
       return;
     }
@@ -182,6 +280,14 @@ function getCharacterSpans(
       char,
       startFrame: frameIndex,
       endFrame: frameIndex,
+      ...(frameConfidences
+        ? {
+            confidence: Math.max(
+              0,
+              Math.min(1, frameConfidences[frameIndex] ?? 0),
+            ),
+          }
+        : {}),
     });
     activeSpanIndex = spans.length - 1;
   });
@@ -193,14 +299,24 @@ export function decodePredictionsDetailed(
   pred: Tensor["data"],
   predShape: Tensor["dims"],
   lang: "en" | "ja" = "en",
+  includeConfidence = false,
 ): DecodedPredictionResult[] {
   const outputResults: DecodedPredictionResult[] = [];
 
   const config = getDecoderConfig(lang);
   const vocabulary = config.VOCABULARY;
-  const predictionIndices = getPredictionIndices(pred, predShape);
+  const framePredictionBatches = includeConfidence
+    ? getFramePredictions(pred, predShape)
+    : null;
+  const predictionIndexBatches = includeConfidence
+    ? framePredictionBatches!.map((batch) => batch.map(({ index }) => index))
+    : getPredictionIndices(pred, predShape);
 
-  for (const predIndices of predictionIndices) {
+  for (let batchIndex = 0; batchIndex < predictionIndexBatches.length; batchIndex += 1) {
+    const predIndices = predictionIndexBatches[batchIndex]!;
+    const frameConfidences = includeConfidence
+      ? framePredictionBatches![batchIndex]!.map(({ confidence }) => confidence)
+      : null;
     const displayText =
       "BLANK_INDEX" in config
         ? decodeCtcForDisplay(predIndices, vocabulary, config.BLANK_INDEX)
@@ -219,11 +335,19 @@ export function decodePredictionsDetailed(
       wordSpaceSpans: getWordSpaceSpans(predIndices, vocabulary),
       characterSpans:
         "BLANK_INDEX" in config
-          ? getCharacterSpans(predIndices, vocabulary, config.BLANK_INDEX)
+          ? getCharacterSpans(
+              predIndices,
+              frameConfidences,
+              vocabulary,
+              config.BLANK_INDEX,
+            )
           : predIndices.map((index, frameIndex) => ({
               char: vocabulary[index] ?? "",
               startFrame: frameIndex,
               endFrame: frameIndex,
+              ...(frameConfidences
+                ? { confidence: frameConfidences[frameIndex] ?? 0 }
+                : {}),
             })),
     });
   }

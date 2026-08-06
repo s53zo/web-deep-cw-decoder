@@ -43,6 +43,7 @@ test("network session cleanup releases every owned resource", async () => {
     streamId: "deepcw_test",
     track,
     meterGraph: { close: () => calls.push("meter.close") },
+    playoutSink: { close: () => calls.push("playout.close") },
   } as unknown as NetworkStereoCleanupSession;
 
   await releaseNetworkStereoSession(
@@ -58,6 +59,7 @@ test("network session cleanup releases every owned resource", async () => {
     "peer.removeListener",
     "sdk.off",
     "meter.close",
+    "playout.close",
     "sdk.stopViewing",
     "track.stop",
     "sdk.disconnect",

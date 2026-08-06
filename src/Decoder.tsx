@@ -9,9 +9,6 @@ import {
   MAX_FREQ_HZ,
   MIN_FREQ_HZ,
   SAMPLE_RATE,
-  PILEUP_WINDOW_S,
-  PILEUP_MIN_FREQ_HZ,
-  PILEUP_MAX_FREQ_HZ,
   WIDE_LAYOUT_WIDTH_PX,
   type DecodeWindowSeconds,
 } from "./const";
@@ -22,20 +19,19 @@ import { useAudioPassthrough } from "./hooks/useAudioPassthrough";
 import { useAudioContextActivation } from "./hooks/useAudioContextActivation";
 import { useFilteredPassthroughStream } from "./hooks/useFilteredPassthroughStream";
 import { useLoadProgress } from "./hooks/useLoadProgress";
-import { usePileupDecode } from "./hooks/usePileupDecode";
-import { usePileupDetection } from "./hooks/usePileupDetection";
+import { usePileupAssets } from "./hooks/usePileupAssets";
 import { usePersistedState } from "./hooks/usePersistedState";
+import { useSo2rPileupChannel } from "./hooks/useSo2rPileupChannel";
 import { useStreamingDecode } from "./hooks/useStreamingDecode";
 import { useSo2rChannel } from "./hooks/useSo2rChannel";
 import { useVdoNinjaStereo } from "./hooks/useVdoNinjaStereo";
 import { DecodeDisplay } from "./DecodeDisplay";
 import { BenchmarkPanel } from "./BenchmarkPanel";
 import { LoadProgressBars } from "./LoadProgressBars";
-import { PileupOverlay } from "./PileupOverlay";
+import { PileupAssetControls } from "./PileupAssetControls";
 import { StreamingTranscriptDisplay } from "./StreamingTranscriptDisplay";
 import { So2rRadioPanel } from "./So2rRadioPanel";
 import { NetworkStereoControls } from "./NetworkStereoControls";
-import type { PileupTrack } from "./utils/pileupCandidates";
 import {
   Box,
   Button,
@@ -60,16 +56,18 @@ import {
   parseStringOption,
 } from "./utils/optionUtils";
 
-type DecoderMode = "normal" | "so2r" | "pileup" | "benchmark";
+type DecoderMode = "normal" | "so2r" | "benchmark";
 type DecoderLanguage = "EN" | "EN/JA";
 type So2rInputSource = "local" | "network";
+type So2rDecoderMode = "standard" | "pileup";
 
-const MODE_OPTIONS = ["normal", "so2r", "pileup", "benchmark"] as const;
+const MODE_OPTIONS = ["normal", "so2r", "benchmark"] as const;
 const AVAILABLE_MODE_OPTIONS = ["normal", "so2r", "benchmark"] as const;
 const LANGUAGE_OPTIONS: readonly DecoderLanguage[] = ["EN", "EN/JA"];
 const BACKEND_OPTIONS: readonly InferenceBackend[] =
   INFERENCE_BACKEND_OPTIONS.map((option) => option.value);
 const SO2R_INPUT_SOURCE_OPTIONS = ["local", "network"] as const;
+const SO2R_DECODER_MODE_OPTIONS = ["standard", "pileup"] as const;
 
 type CaptureInfo = {
   requestedChannelCount: 1 | 2;
@@ -101,6 +99,13 @@ export const Decoder = () => {
       "local",
       (value): value is So2rInputSource =>
         hasMatchingOption(value, SO2R_INPUT_SOURCE_OPTIONS),
+    );
+  const [so2rDecoderMode, setSo2rDecoderMode] =
+    usePersistedState<So2rDecoderMode>(
+      "decoder.so2r.decoderMode",
+      "standard",
+      (value): value is So2rDecoderMode =>
+        hasMatchingOption(value, SO2R_DECODER_MODE_OPTIONS),
     );
   const networkStreamId = NETWORK_STEREO_STREAM_ID;
   const networkStereo = useVdoNinjaStereo();
@@ -187,14 +192,13 @@ export const Decoder = () => {
       (value): value is string => typeof value === "string",
     );
 
-  const pileupTracksRef = useRef<PileupTrack[]>([]);
   const previousModeRef = useRef<DecoderMode>(mode);
   const captureRequestIdRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(stream);
   streamRef.current = stream;
 
   const isSo2r = mode === "so2r";
-  const isPileup = mode === "pileup";
+  const isSo2rPileup = isSo2r && so2rDecoderMode === "pileup";
   const isBenchmark = mode === "benchmark";
   const isNetworkSo2r = isSo2r && so2rInputSource === "network";
   let networkSenderUrl: string | null = null;
@@ -223,7 +227,7 @@ export const Decoder = () => {
     stream: isSo2r ? null : decoderStream,
     enabled: mode === "normal",
     selectedAudioOutput,
-    filterFreq: isPileup ? null : filterFreq,
+    filterFreq,
     filterWidth,
   });
 
@@ -296,10 +300,8 @@ export const Decoder = () => {
     [],
   );
 
-  const effectiveWindowSeconds = isPileup
-    ? PILEUP_WINDOW_S
-    : decodeWindowSeconds;
-  const progressLanguage = isPileup || isSo2r ? "EN" : language;
+  const effectiveWindowSeconds = decodeWindowSeconds;
+  const progressLanguage = isSo2r ? "EN" : language;
 
   const audioBufferRef = useAudioProcessing(
     isSo2r ? null : decoderStream,
@@ -308,8 +310,8 @@ export const Decoder = () => {
   const loadProgress = useLoadProgress(
     backend,
     progressLanguage,
-    isPileup ? "narrow" : "standard",
-    isPileup,
+    "standard",
+    false,
   );
 
   const {
@@ -324,10 +326,10 @@ export const Decoder = () => {
     currentTextJaVersion,
     isDecoding,
   } = useDecode({
-    filterFreq: isPileup ? null : filterFreq,
+    filterFreq,
     filterWidth,
     stream: decoderStream,
-    language: isPileup ? "EN" : language,
+    language,
     backend,
     decodeWindowSeconds: effectiveWindowSeconds,
     audioBufferRef,
@@ -340,48 +342,19 @@ export const Decoder = () => {
     pendingTextJa: streamingPendingTextJa,
     loadError: streamingLoadError,
   } = useStreamingDecode({
-    filterFreq: isPileup ? null : filterFreq,
+    filterFreq,
     filterWidth,
     stream: decoderStream,
-    language: isPileup ? "EN" : language,
+    language,
     backend,
     enabled: mode === "normal",
   });
 
-  const {
-    tracks: pileupTracks,
-    loaded: pileupDetectionLoaded,
-    loadError: pileupDetectionLoadError,
-  } = usePileupDetection({
-    stream: decoderStream,
-    backend,
-    audioBufferRef,
-    enabled: isPileup,
-    minFreqHz: PILEUP_MIN_FREQ_HZ,
-    maxFreqHz: PILEUP_MAX_FREQ_HZ,
-  });
-
-  useEffect(() => {
-    pileupTracksRef.current = pileupTracks;
-  }, [pileupTracks]);
-
-  const {
-    textMap,
-    isDecoding: isPileupDecoding,
-    loaded: pileupLoaded,
-    loadError: pileupLoadError,
-  } = usePileupDecode({
-    stream: decoderStream,
-    backend,
-    audioBufferRef,
-    tracksRef: pileupTracksRef,
-    enabled: isPileup,
-    decodeWindowSeconds: effectiveWindowSeconds,
-  });
+  const pileupAssets = usePileupAssets();
 
   const so2rLeftDecoder = useSo2rChannel({
     stream: decoderStream,
-    enabled: isSo2r,
+    enabled: isSo2r && so2rDecoderMode === "standard",
     channelIndex: 0,
     filterFreq: so2rLeftFilterFreq,
     filterWidth: so2rLeftFilterWidth,
@@ -390,12 +363,28 @@ export const Decoder = () => {
   });
   const so2rRightDecoder = useSo2rChannel({
     stream: decoderStream,
-    enabled: isSo2r,
+    enabled: isSo2r && so2rDecoderMode === "standard",
     channelIndex: 1,
     filterFreq: so2rRightFilterFreq,
     filterWidth: so2rRightFilterWidth,
     decodeWindowSeconds: so2rRightWindowSeconds,
     backend,
+  });
+  const so2rLeftPileupDecoder = useSo2rPileupChannel({
+    stream: decoderStream,
+    enabled: isSo2rPileup && pileupAssets.ready,
+    channelIndex: 0,
+    filterFreq: so2rLeftFilterFreq,
+    filterWidth: so2rLeftFilterWidth,
+    assetSignature: pileupAssets.signature,
+  });
+  const so2rRightPileupDecoder = useSo2rPileupChannel({
+    stream: decoderStream,
+    enabled: isSo2rPileup && pileupAssets.ready,
+    channelIndex: 1,
+    filterFreq: so2rRightFilterFreq,
+    filterWidth: so2rRightFilterWidth,
+    assetSignature: pileupAssets.signature,
   });
 
   const setSelectedAudioInput = (deviceId: string) => {
@@ -571,15 +560,19 @@ export const Decoder = () => {
     }
   };
 
-  const loadError = isPileup
-    ? (pileupDetectionLoadError ?? pileupLoadError)
+  const loadError = isSo2rPileup
+    ? (pileupAssets.error ??
+      so2rLeftPileupDecoder.loadError ??
+      so2rRightPileupDecoder.loadError)
     : isSo2r
     ? (so2rLeftDecoder.loadError ?? so2rRightDecoder.loadError)
     : isBenchmark
     ? null
     : (normalLoadError ?? streamingLoadError);
-  const isLoading = isPileup
-    ? !pileupLoaded || !pileupDetectionLoaded
+  const isLoading = isSo2rPileup
+    ? pileupAssets.isLoading ||
+      (pileupAssets.ready &&
+        (!so2rLeftPileupDecoder.loaded || !so2rRightPileupDecoder.loaded))
     : isSo2r
     ? !so2rLeftDecoder.loaded || !so2rRightDecoder.loaded
     : isBenchmark
@@ -589,7 +582,7 @@ export const Decoder = () => {
   const isActive =
     !isBenchmark &&
     (isNetworkSo2r ? networkStereo.isActive : stream !== null || isStarting);
-  const scopeHeight = isPileup ? 768 : 256;
+  const scopeHeight = 256;
   const isWideViewport = useMediaQuery("(min-width: 801px)", true, {
     getInitialValueInEffect: false,
   });
@@ -637,6 +630,8 @@ export const Decoder = () => {
           setDecodeWindowSeconds={setSo2rLeftWindowSeconds}
           backend={backend}
           decoder={so2rLeftDecoder}
+          decoderMode={so2rDecoderMode}
+          pileupDecoder={so2rLeftPileupDecoder}
         />
         <So2rRadioPanel
           label="RIGHT RADIO"
@@ -650,6 +645,8 @@ export const Decoder = () => {
           setDecodeWindowSeconds={setSo2rRightWindowSeconds}
           backend={backend}
           decoder={so2rRightDecoder}
+          decoderMode={so2rDecoderMode}
+          pileupDecoder={so2rRightPileupDecoder}
         />
       </Box>
     </Box>
@@ -662,17 +659,10 @@ export const Decoder = () => {
               <Scope
                 stream={decoderStream}
                 setFilterFreq={setFilterFreq}
-                filterFreq={isPileup ? null : filterFreq}
+                filterFreq={filterFreq}
                 filterWidth={filterWidth}
                 decodeWindowSeconds={effectiveWindowSeconds}
-                disableInteraction={isPileup}
                 height={scopeHeight}
-                brightness={isPileup ? 0.75 : 1}
-                maxDevicePixelRatio={isPileup ? 1.25 : undefined}
-                {...(isPileup && {
-                  minFreqHz: PILEUP_MIN_FREQ_HZ,
-                  maxFreqHz: PILEUP_MAX_FREQ_HZ,
-                })}
               />
             ) : (
               <Box
@@ -683,22 +673,11 @@ export const Decoder = () => {
                 }}
               />
             )}
-            {isPileup && decoderStream && (
-              <PileupOverlay
-                tracks={pileupTracks}
-                textMap={textMap}
-                isDecoding={isPileupDecoding}
-                decodeWindowSeconds={effectiveWindowSeconds}
-                minFreqHz={PILEUP_MIN_FREQ_HZ}
-                maxFreqHz={PILEUP_MAX_FREQ_HZ}
-              />
-            )}
           </Box>
         </Flex>
       </Box>
 
-      {!isPileup && (
-        <Box px={decoderEdgePadding}>
+      <Box px={decoderEdgePadding}>
           <Stack gap="xs">
             <Stack gap={0}>
               <DecodeDisplay
@@ -741,8 +720,7 @@ export const Decoder = () => {
               )}
             </Stack>
           </Stack>
-        </Box>
-      )}
+      </Box>
     </Stack>
   );
 
@@ -763,11 +741,6 @@ export const Decoder = () => {
           data={[
             { value: "normal", label: "Normal" },
             { value: "so2r", label: "SO2R" },
-            {
-              value: "pileup",
-              label: "Pileup (model unavailable)",
-              disabled: true,
-            },
             { value: "benchmark", label: "Benchmark" },
           ]}
           value={mode}
@@ -784,21 +757,51 @@ export const Decoder = () => {
         />
         {!isBenchmark && (
           <>
-            <NativeSelect
-              label="ENGINE"
-              data={INFERENCE_BACKEND_OPTIONS}
-              value={backend}
-              onChange={(event) => {
-                const nextBackend = parseStringOption(
-                  event.currentTarget.value,
-                  BACKEND_OPTIONS,
-                );
-                if (nextBackend !== undefined) {
-                  setBackend(nextBackend);
-                }
-              }}
-              style={contentWidthSelectStyle}
-            />
+            {isSo2rPileup ? (
+              <NativeSelect
+                label="PILEUP ENGINE"
+                data={[{ value: "native", label: "Native WASM" }]}
+                value="native"
+                disabled
+                style={contentWidthSelectStyle}
+              />
+            ) : (
+              <NativeSelect
+                label="ENGINE"
+                data={INFERENCE_BACKEND_OPTIONS}
+                value={backend}
+                onChange={(event) => {
+                  const nextBackend = parseStringOption(
+                    event.currentTarget.value,
+                    BACKEND_OPTIONS,
+                  );
+                  if (nextBackend !== undefined) {
+                    setBackend(nextBackend);
+                  }
+                }}
+                style={contentWidthSelectStyle}
+              />
+            )}
+            {isSo2r ? (
+              <NativeSelect
+                label="SO2R DECODER"
+                data={[
+                  { value: "standard", label: "Standard" },
+                  { value: "pileup", label: "Pileup" },
+                ]}
+                value={so2rDecoderMode}
+                onChange={(event) => {
+                  const nextDecoderMode = parseStringOption(
+                    event.currentTarget.value,
+                    SO2R_DECODER_MODE_OPTIONS,
+                  );
+                  if (nextDecoderMode !== undefined) {
+                    setSo2rDecoderMode(nextDecoderMode);
+                  }
+                }}
+                style={contentWidthSelectStyle}
+              />
+            ) : null}
           </>
         )}
       </Flex>
@@ -905,13 +908,24 @@ export const Decoder = () => {
               onEnableMacAudio={audioContextActivation.resume}
             />
           ) : null}
+          {isSo2rPileup ? (
+            <PileupAssetControls
+              assets={pileupAssets.assets}
+              ready={pileupAssets.ready}
+              isLoading={pileupAssets.isLoading}
+              leftProgress={so2rLeftPileupDecoder.loadProgress}
+              rightProgress={so2rRightPileupDecoder.loadProgress}
+              onLoadFiles={pileupAssets.loadFiles}
+              onForget={pileupAssets.forget}
+            />
+          ) : null}
           <Flex
             gap="md"
             justify={controlJustify}
             wrap="wrap"
             style={controlRowStyle}
           >
-            {!isPileup && !isSo2r && (
+            {!isSo2r && (
               <>
                 <NativeSelect
                   label="WINDOW"
@@ -984,7 +998,9 @@ export const Decoder = () => {
             )}
             {isSo2r && (
               <Text size="xs" c="dimmed">
-                Both radios share the selected engine and English model.
+                {isSo2rPileup
+                  ? `Each radio uses an isolated Native WASM worker, limited to ${so2rLeftPileupDecoder.maxLanes} signal lanes.`
+                  : "Both radios share the selected engine and English model."}
               </Text>
             )}
           </Flex>
@@ -1023,7 +1039,10 @@ export const Decoder = () => {
                     void getStream(selectedAudioInput || undefined);
                   }
                 }}
-                disabled={!isActive && isLoading}
+                disabled={
+                  !isActive &&
+                  (isLoading || (isSo2rPileup && !pileupAssets.ready))
+                }
               >
                 {isNetworkSo2r
                   ? networkStereo.isActive
@@ -1034,7 +1053,9 @@ export const Decoder = () => {
                     : "START"}
               </Button>
               <Box style={{ flex: 1, minWidth: 0, maxWidth: "400px" }}>
-                <LoadProgressBars progress={loadProgress} />
+                {!isSo2rPileup ? (
+                  <LoadProgressBars progress={loadProgress} />
+                ) : null}
                 {isSo2r && !isNetworkSo2r && captureInfo ? (
                   <Text size="xs" c="dimmed">
                     CAPTURE: {captureInfo.channelCount} channels ·{" "}

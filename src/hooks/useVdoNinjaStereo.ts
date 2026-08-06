@@ -18,6 +18,10 @@ type MeterGraph = {
   close: () => void;
 };
 
+type PlayoutSink = {
+  close: () => void;
+};
+
 type SDKAnswerConnection = { pc: RTCPeerConnection };
 type SDKWithAnswerHook = VDONinjaSDK & {
   _createAnswer?: (
@@ -38,6 +42,7 @@ type ActiveSession = {
   track: MediaStreamTrack | null;
   candidateStream: MediaStream | null;
   meterGraph: MeterGraph | null;
+  playoutSink: PlayoutSink | null;
   monoEvidencePolls: number;
   stereoVerified: boolean;
 };
@@ -127,6 +132,44 @@ function createStereoMeterGraph(
       void context.close();
     },
   };
+}
+
+function createMutedPlayoutSink(stream: MediaStream): PlayoutSink {
+  const element = document.createElement("audio");
+  element.autoplay = true;
+  element.muted = true;
+  element.preload = "none";
+  element.hidden = true;
+  element.setAttribute("playsinline", "");
+  element.setAttribute("aria-hidden", "true");
+  element.srcObject = stream;
+  document.body.appendChild(element);
+
+  // Chrome does not always start a remote WebRTC receiver when its only
+  // consumers are MediaStreamAudioSourceNodes. A muted media element provides
+  // the native playout clock without changing DeepCW's decoded audio path.
+  void element.play().catch((playError) => {
+    console.warn("Unable to start the network audio playout clock.", playError);
+  });
+
+  return {
+    close: () => {
+      element.pause();
+      element.srcObject = null;
+      element.remove();
+    },
+  };
+}
+
+function getOriginalAudioStream(
+  track: MediaStreamTrack,
+  streams: readonly MediaStream[] | undefined,
+): MediaStream {
+  return (
+    streams?.find((stream) =>
+      stream.getAudioTracks().some((candidate) => candidate === track),
+    ) ?? new MediaStream([track])
+  );
 }
 
 function statsToArray(report: RTCStatsReport): RTCStatsLike[] {
@@ -288,6 +331,7 @@ export function useVdoNinjaStereo() {
         track: null,
         candidateStream: null,
         meterGraph: null,
+        playoutSink: null,
         monoEvidencePolls: 0,
         stereoVerified: false,
       };
@@ -308,6 +352,8 @@ export function useVdoNinjaStereo() {
       const clearReceivedTrack = () => {
         session.meterGraph?.close();
         session.meterGraph = null;
+        session.playoutSink?.close();
+        session.playoutSink = null;
         if (session.track) {
           session.track.onended = null;
           session.track.stop();
@@ -484,6 +530,7 @@ export function useVdoNinjaStereo() {
         if (!isCurrent()) return;
         const detail = event.detail as {
           track?: MediaStreamTrack;
+          streams?: MediaStream[];
           streamID?: string | null;
           uuid?: string;
         };
@@ -512,8 +559,10 @@ export function useVdoNinjaStereo() {
           session.track.stop();
         }
         session.meterGraph?.close();
+        session.playoutSink?.close();
         session.track = track;
-        session.candidateStream = new MediaStream([track]);
+        session.candidateStream = getOriginalAudioStream(track, detail.streams);
+        session.playoutSink = createMutedPlayoutSink(session.candidateStream);
         session.monoEvidencePolls = 0;
         session.stereoVerified = false;
         try {
@@ -536,6 +585,8 @@ export function useVdoNinjaStereo() {
           if (!isCurrent() || session.track !== track) return;
           session.meterGraph?.close();
           session.meterGraph = null;
+          session.playoutSink?.close();
+          session.playoutSink = null;
           session.track = null;
           session.candidateStream = null;
           clearDecodedStream();

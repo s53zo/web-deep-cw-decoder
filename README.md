@@ -46,9 +46,10 @@ settings: 3.2 kHz linear resampling, centered 256-sample Hann frames, 48-sample
 hop, 400–1200 Hz / 65 bins, and `log1p` magnitude normalization.
 
 The public engine distribution currently includes the standard English model.
-Pileup mode and Japanese decoding remain visible but disabled because their
-separate models are not publicly distributed with the engine. Normal,
-Benchmark, and SO2R modes use the verified English model.
+Japanese decoding remains disabled because its separate model is not publicly
+distributed with the engine. SO2R additionally supports a private local Pileup
+decoder when the user supplies separately licensed CWM1 files through the
+browser. Those files are never part of this repository or a deployment.
 
 ## SO2R stereo input
 
@@ -154,6 +155,104 @@ the contest:
 Identical signals or silence on both channels are valid and are not treated as a
 mono test. Verification is based on negotiated channel structure, not on the two
 waveforms being different.
+
+## Private SO2R Pileup mode
+
+SO2R has an independent **SO2R DECODER** selector:
+
+- **Standard** is the default and retains the existing English ONNX processing.
+- **Pileup** scans each radio's selected passband and can maintain up to five
+  simultaneous decoder lanes per radio.
+
+Pileup is deliberately based on e04's implementation rather than a new detector
+designed around the same models. Two e04 references are relevant:
+
+- The [public GitHub implementation](https://github.com/e04/web-deep-cw-decoder)
+  defines the original mode's architecture and lifecycle: an eight-second
+  full-passband window, separate detection and narrow-decoding phases, at most
+  five selected signals, roughly 400 ms candidate confirmation, up to five
+  seconds of established-signal retention, and a 1.5-second live-text hold.
+- The newer deployed e04 runtime defines how these licensed CWM1 packages
+  actually run. It uses 9.6 kHz audio with native preprocessing to the models'
+  3.2 kHz rate, a 12.5 Hz detector grid, 0.1 presence and 0.5 new-track
+  thresholds, probability-island grouping, 0.15/0.75 peak splitting, sub-bin
+  peak interpolation, candidate score/frequency/width hysteresis, a 200 ms live
+  cadence, and batched 15-bin narrow decoding.
+
+The public repository still uses its earlier ONNX/SNR models and five-bin
+narrow input, so copying that inference code would be incompatible with these
+CWM1 manifests. This fork retains its mode structure and lifecycle but uses the
+newer CWM-specific detector math, 15-bin extraction, and native WASM ABI. The
+CWM files are never passed to ONNX Runtime.
+
+The intentional SO2R adaptations are narrow and explicit: the pipeline begins
+after the existing verified left/right stereo split, each radio owns an
+independent worker and candidate state, the visible/decoded set is capped at
+five lanes per radio, and each worker has a latest-only bounded queue so delayed
+work cannot accumulate. Model selection through a private local file picker is
+also specific to this fork. These changes do not alter the detector math,
+tracking thresholds, narrow-band extraction, or CTC decoding behavior.
+
+Left and right therefore keep independent audio, candidate state, queues,
+transcripts, and lifecycle.
+The private CWM runtime currently exposes Native WASM rather than WebGPU; the UI
+reports that explicitly. The Standard decoder's WASM/WebGPU selector is
+unchanged.
+
+### Load the local files
+
+Select **SO2R**, then choose **Pileup** under **SO2R DECODER**. Select
+**LOAD LOCAL PILEUP FILES** and choose these three files together:
+
+```text
+.local-private/pileup-models/detect_cw_model.cwm
+.local-private/pileup-models/model_en_narrow_small.cwm
+.local-private/pileup-models/deepcw-core.wasm
+```
+
+The directory is hidden on macOS. In the file picker, press
+<kbd>Command</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> and enter the complete path:
+
+```text
+/Users/simon/github/web-deep-cw-decoder/.local-private/pileup-models
+```
+
+DeepCW validates the CWM1 tasks, architecture, 3.2 kHz model rate, narrow-bin
+shape, and WASM header before saving the files to IndexedDB for that browser
+origin. The files are not requested over HTTP, uploaded, placed in `public/`,
+or stored in the service-worker cache. **FORGET LOCAL PILEUP FILES** deletes the
+IndexedDB copies without deleting the originals on disk.
+
+Use the same local URL each time; `localhost` and `127.0.0.1` are different
+browser origins with separate IndexedDB stores.
+
+### Test and benchmark
+
+The functional smoke test synthesizes two simultaneous CW signals, then uses
+the private detector and narrow decoder to prove that both are independently
+found and decoded:
+
+```bash
+npm run smoke:pileup
+```
+
+The concurrent benchmark runs an eight-second window and five decoder lanes on
+both radio workers at once:
+
+```bash
+npm run benchmark:pileup
+```
+
+On the M5 MacBook used for development, concurrent ten-run samples averaged
+about 165–200 ms per radio for an eight-second window and five decoder lanes,
+with approximately two CPU cores used across the two workers. Pileup uses the
+original 200 ms minimum analysis cadence and a latest-only bounded queue; when
+inference briefly exceeds the cadence, the next run uses the newest audio rather
+than processing a backlog. The UI reports detector and
+decoder time, queue depth, and dropped snapshots independently for each radio.
+
+Every production build runs `scripts/verify-private-assets.mjs`. It rejects CWM
+packages, private filenames, or exact local-file hashes in `dist/`.
 
 ### Network stereo troubleshooting
 

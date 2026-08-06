@@ -9,6 +9,7 @@ import { registerAudioContext } from "../utils/audioContextActivation";
 export type AudioBufferState = {
   samples: Float32Array;
   version: number;
+  endSample: number;
 };
 
 function audioCallback(
@@ -26,6 +27,7 @@ function audioCallback(
   samples.copyWithin(0, chunkLen);
   samples.set(chunkSlice, offset);
   audioBufferState.version += 1;
+  audioBufferState.endSample += chunkLen;
 }
 
 export function useAudioProcessing(
@@ -37,6 +39,7 @@ export function useAudioProcessing(
   const audioBufferRef = useRef<AudioBufferState>({
     samples: new Float32Array(getBufferSamples(bufferDurationSeconds)),
     version: 0,
+    endSample: 0,
   });
   const audioContextRef = useRef<AudioContext | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -45,6 +48,7 @@ export function useAudioProcessing(
     audioBufferRef.current = {
       samples: new Float32Array(getBufferSamples(bufferDurationSeconds)),
       version: audioBufferRef.current.version + 1,
+      endSample: audioBufferRef.current.endSample,
     };
   }, [bufferDurationSeconds]);
 

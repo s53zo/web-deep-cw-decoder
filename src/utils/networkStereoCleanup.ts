@@ -14,6 +14,7 @@ export type NetworkStereoCleanupSession = {
   streamId: string;
   track: Pick<MediaStreamTrack, "onended" | "stop"> | null;
   meterGraph: { close: () => void } | null;
+  playoutSink: { close: () => void } | null;
 };
 
 export async function releaseNetworkStereoSession(
@@ -32,6 +33,7 @@ export async function releaseNetworkStereoSession(
   session.listeners.forEach(({ event, handler }) => session.sdk.off(event, handler));
   if (session.track) session.track.onended = null;
   session.meterGraph?.close();
+  session.playoutSink?.close();
   try {
     session.sdk.stopViewing(session.streamId);
   } catch (stopError) {
